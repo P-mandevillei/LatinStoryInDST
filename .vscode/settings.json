@@ -1,0 +1,13 @@
+{
+    "Lua.runtime.version": "Lua 5.1",
+    "Lua.workspace.library": [
+        "C:/Users/repti/OneDrive/Desktop/WashU/Y4/FL26/latin/scripts/scripts"
+    ],
+    "Lua.diagnostics.globals": [
+        "GLOBAL",
+        "PrefabFiles",
+        "Assets",
+        "AddPrefabPostInit",
+        "modimport"
+    ]
+}
