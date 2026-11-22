@@ -24,7 +24,7 @@ for ch, contents in pairs(DIALOG) do
   end
 end
 
-DIALOG.CH1_SEP = {4, 5}
+DIALOG.CH1_SEP = {4, 5, 10}
 
 
 -- debug only
