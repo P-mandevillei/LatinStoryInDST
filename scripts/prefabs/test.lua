@@ -1,6 +1,8 @@
 -- rocks animation files
-local assets = {
-  Asset("ANIM", "anim/rocks.zip") -- type of asset, asset file
+local assets = { -- type of asset, asset file
+  Asset("ANIM", "anim/test.zip"),
+  Asset("ATLAS", "images/test.xml"),
+  Asset("IMAGE", "images/test.tex")
 }
 
 local function foo()
@@ -11,9 +13,9 @@ local function foo()
 
   MakeInventoryPhysics(inst)
 
-  inst.AnimState:SetBank("rocks") -- what set of animations we're using
-  inst.AnimState:SetBuild("rocks") -- texture
-  inst.AnimState:PlayAnimation("f1") -- play when entity is created
+  inst.AnimState:SetBank("test") -- what set of animations we're using
+  inst.AnimState:SetBuild("test") -- texture
+  inst.AnimState:PlayAnimation("idle") -- play when entity is created
 
   inst.entity:SetPristine()
   -- add components only on the server
@@ -23,12 +25,18 @@ local function foo()
   end
   inst:AddComponent("inspectable") -- add component
 
-  inst:AddComponent("inventoryitem")
+  inst:AddComponent("inventoryitem") -- show in inventory
   inst.components.inventoryitem.imagename = "test"
   inst.components.inventoryitem.atlasname = "images/test.xml"
 
   inst:AddComponent("stackable")
   inst.components.stackable.maxsize = 10
+
+  inst:AddComponent("huggable")
+  inst.components.huggable:SetSanityGain(15)
+
+  inst:AddComponent("equippable")
+  inst.components.equippable.equipslot = EQUIPSLOTS.HANDS
 
   return inst
 end

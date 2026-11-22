@@ -1,28 +1,31 @@
 print("<------------------- LatinPresentation -------------------->")
+local HELPERS = require("helpers")
 
--- add texture files
+-- add texture & anim files
 Assets = {
   Asset("ATLAS", "images/test.xml"),
-  Asset("IMAGE", "images/test.tex")
+  Asset("IMAGE", "images/test.tex"),
+
+  Asset("ANIM", "anim/test.zip")
 }
+
 -- register prefabs
 PrefabFiles = {
   "test"
 }
 
-local CHARACTERS = {
-  "WILLOW", "WOLFGANG", "WENDY", "WX78", "WICKERBOTTOM",
-  "WOODIE", "WAXWELL", "WATHGRITHR", "WEBBER", "WINONA",
-  "WARLY", "WORTOX", "WORMWOOD", "WURT", "WALTER", "WANDA"
-}
-local function add_quote(prefab_name, display_name, generic, characters)
-  prefab_name = string.upper(prefab_name)
-  GLOBAL.STRINGS.NAMES[prefab_name] = display_name
-  GLOBAL.STRINGS.CHARACTERS.GENERIC.DESCRIBE[prefab_name] = generic
-  for _, ch in ipairs(CHARACTERS) do
-    GLOBAL.STRINGS.CHARACTERS[ch].DESCRIBE[prefab_name] = characters[ch] or generic
-  end
-end
-
 -- name prefabs
-add_quote("test", "This is a test", "test display", {})
+HELPERS.add_quote("test", "This is a test", "test display")
+
+modimport("items/hugTest.lua")
+
+AddPlayerPostInit(function(inst)
+  if not GLOBAL.TheWorld.ismastersim then
+    return
+  end
+
+  inst:AddComponent("libellusprogress")
+  inst:DoTaskInTime(HELPERS.START_INTERVAL, function(inst)
+    inst.components.libellusprogress:DialogLoop(inst)
+  end)
+end)
