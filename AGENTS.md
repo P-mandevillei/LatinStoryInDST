@@ -10,6 +10,8 @@ This project turns a Latin playscript into a mod in Don't Starve Together (DST).
 - `scripts/brains/` controls following, chasing, and returning to guard positions. `scripts/stategraphs/` controls movement and combat animations; `SGmiles.lua` rechecks the casa boundary before applying attack damage.
 - `scripts/prefabs/test.lua`, `scripts/components/huggable.lua`, and `items/hugTest.lua` implement the experimental inventory item and sanity-restoring hug action. Custom assets live in `anim/`, `images/`, and `exported/`; story NPCs reuse game assets.
 
+- `scripts/dialogselector.lua` optionally adds the pause-menu dialogue selector and its RPC. `dialogselection.lua` validates choices; `screens/dialogselectorscreen.lua` supplies the UI. Current progress is mirrored to player network fields by `SetProgress`; selection changes only the sending player's chapter and line.
+
 ## Working conventions and tests
 
 Keep story progression in the player component, encounter ownership in the casa prefab, and movement decisions in brains. Create replicated visuals and talkers before `SetPristine()`; add server-only gameplay components after the master-simulation check. Register new prefabs in `modmain.lua`.
@@ -19,6 +21,7 @@ Run the mocked Lua tests from the mod root:
 ```sh
 lua tests/libellusprogress_test.lua
 lua tests/casa_test.lua
+lua tests/dialogselection_test.lua
 ```
 
 These cover dialogue, spawning, persistence, client/server setup, and guard boundaries. They do not replace in-game checks of visuals, physics, and networking.

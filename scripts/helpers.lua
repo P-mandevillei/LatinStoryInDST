@@ -23,6 +23,7 @@ HELPERS.CASA_HALF_SIZE = 7
 HELPERS.CASA_NEAR_DISTANCE = 18
 HELPERS.CASA_CHECK_INTERVAL = .1
 HELPERS.SOLDIER_HEALTH = 1000
+HELPERS.SOLDIER_DAMAGE = 25
 
 -- Keep the entire courtyard on clear land, including the hound's enclosure.
 function HELPERS.FindCasaSpawnPoint(origin)

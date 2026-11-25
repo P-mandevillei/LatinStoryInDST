@@ -23,6 +23,10 @@ function LibellusProgress:SetProgress(chapter, dialog, expected_revision)
   self.chapter = chapter
   self.dialog = dialog
   self._progress_revision = self._progress_revision + 1
+  if self.inst._libellus_chapter ~= nil then
+    self.inst._libellus_chapter:set(chapter)
+    self.inst._libellus_dialog:set(dialog)
+  end
   return true
 end
 
@@ -31,7 +35,6 @@ function LibellusProgress:OnSave()
   local data = {
     chapter = self.chapter,
     dialog = self.dialog,
-    casa_entered = self._casa_entered,
     spawnpoint = point ~= nil and {x = point.x, y = point.y, z = point.z} or nil
   }
   -- Once recruited, save Publius with the player just like DST's pets. This
@@ -48,7 +51,6 @@ end
 function LibellusProgress:OnLoad(data)
   if data ~= nil then
     self:SetProgress(data.chapter, data.dialog)
-    self._casa_entered = data.casa_entered
     if data.spawnpoint ~= nil then
       local point = data.spawnpoint
       self._spawnpoint = Vector3(point.x, point.y, point.z)
@@ -135,14 +137,6 @@ function LibellusProgress:EnsureCasa()
   return casa
 end
 
--- Latch entry separately from speech so fleeing cannot lose the warning.
-function LibellusProgress:OnCasaEntered(casa)
-  if casa == self._casa and self.chapter == "ch2"
-    and self.dialog <= DIALOG.CH2_SEP[2] then
-    self._casa_entered = true
-  end
-end
-
 local function IsBusy(inst)
   local talker = inst.components.talker
   return talker == nil or inst.loadingprotection or inst:HasTag("playerghost")
@@ -160,8 +154,7 @@ end
 
 function LibellusProgress:DialogLoop(inst)
   local publius = not inst.loadingprotection and self:EnsurePublius() or nil
-  local casa = not inst.loadingprotection and self:EnsureCasa() or nil
-  if casa ~= nil and casa:Contains(inst) then self:OnCasaEntered(casa) end
+  if not inst.loadingprotection then self:EnsureCasa() end
   -- Progress points past the last line as soon as it starts. Wait until both
   -- speech bubbles finish before starting the permanent follower relationship.
   if publius ~= nil and (self.chapter ~= "ch1" or self.dialog > DIALOG.CH1_SEP[3])
@@ -172,14 +165,17 @@ function LibellusProgress:DialogLoop(inst)
     publius.persists = false
   end
 
-  if IsBusy(inst) or (publius ~= nil and IsBusy(publius)) then
+  local chapter, dialog = self:GetProgress()
+  local casa_dialog = chapter == "ch2" and dialog > DIALOG.CH2_SEP[1]
+    and dialog <= DIALOG.CH2_SEP[2]
+  -- The entry exchange continues while the player flees or fights.
+  if not casa_dialog and (IsBusy(inst) or (publius ~= nil and IsBusy(publius))) then
     inst:DoTaskInTime(HELPERS.BUSY_INTERVAL, function(inst)
       self:DialogLoop(inst)
     end)
     return
   end
 
-  local chapter, dialog = self:GetProgress()
   local revision = self._progress_revision
   local say_func = self.IdleState
   if chapter == "ch1" then
@@ -281,10 +277,11 @@ function LibellusProgress:SayChapterTwoLine(inst, chapter, dialog, revision)
   local actors = {Octavia = inst, Publius = self._publius,
     Milites = self._casa ~= nil and self._casa:GetSoldier() or nil}
   local speaker = actors[line.name]
-  -- A soldier can speak his warning during combat animations.
+  local casa_dialog = dialog > DIALOG.CH2_SEP[1] and dialog <= DIALOG.CH2_SEP[2]
+  -- Combat animations must not hold up the entry exchange.
   if speaker == nil or not speaker:IsValid() or speaker.components.talker == nil
     or speaker.components.talker:IsTalking()
-    or (line.name ~= "Milites" and IsBusy(speaker)) then
+    or (not casa_dialog and IsBusy(speaker)) then
     return HELPERS.BUSY_INTERVAL
   end
   local facing = actors[line.facing]
@@ -294,7 +291,7 @@ function LibellusProgress:SayChapterTwoLine(inst, chapter, dialog, revision)
   return self:Say(speaker, chapter, dialog, revision, line.content,
     function(d)
       if d <= DIALOG.CH2_SEP[2] and d > DIALOG.CH2_SEP[1] then
-        return chapter, (d-DIALOG.CH2_SEP[1])%3 + 1 + DIALOG.CH2_SEP[2]
+        return chapter, (d-DIALOG.CH2_SEP[1])%3 + 1 + DIALOG.CH2_SEP[1]
       else
         return chapter, d+1
       end
@@ -312,7 +309,11 @@ function LibellusProgress:SayChapterTwoApproach(inst, chapter, dialog, revision)
 end
 
 function LibellusProgress:SayChapterTwoEntry(inst, chapter, dialog, revision)
-  if not self._casa_entered then return HELPERS.CHECK_PROGRESS_INTERVAL end
+  local casa = self._casa
+  if dialog == DIALOG.CH2_SEP[1] + 1
+    and (casa == nil or not casa:IsValid() or not casa:Contains(inst)) then
+    return HELPERS.CHECK_PROGRESS_INTERVAL
+  end
   return self:SayChapterTwoLine(inst, chapter, dialog, revision)
 end
 

@@ -39,8 +39,18 @@ local function reset()
   end
   function TheWorld.Map:IsPointNearHole() return hole end
   function TheWorld.Map:GetTileAtPoint() return WORLD_TILES.GRASS end
-  TheSim = {FindEntities = function()
-    return obstacle and {{GetPhysicsRadius = function() return 1 end}} or {}
+  TheSim = {FindEntities = function(_, x, y, z, radius, musttags, excludetags)
+    if obstacle and musttags == nil then return {{GetPhysicsRadius = function() return 1 end}} end
+    local found = {}
+    for _, ent in pairs(Ents) do
+      local include = ent:IsValid()
+        and (ent.position.x - x)^2 + (ent.position.z - z)^2 <= radius^2
+      for _, tag in ipairs(musttags or {}) do include = include and ent:HasTag(tag) end
+      for _, tag in ipairs(excludetags or {}) do include = include and not ent:HasTag(tag) end
+      if include then table.insert(found, ent) end
+    end
+    table.sort(found, function(a, b) return a.GUID < b.GUID end)
+    return found
   end}
 end
 function GetTime() return now end
@@ -75,6 +85,7 @@ local function Entity()
     position = Vector3(0, 0, 0), events = {}}
   Ents[serial] = inst
   function inst:IsValid() return self.valid end
+  function inst:IsInLimbo() return self:HasTag("INLIMBO") end
   function inst:Remove() self.valid = false end
   function inst:HasTag(tag) return self.tags[tag] == true end
   function inst:AddTag(tag) self.tags[tag] = true end
@@ -86,6 +97,9 @@ local function Entity()
   function inst:FacePoint(x, y, z) self.facing = Vector3(x, y, z) end
   function inst:ClearBufferedAction() self.cleared = true end
   function inst:ListenForEvent(name, fn) self.events[name] = fn end
+  function inst:PushEvent(name, data)
+    if self.events[name] ~= nil then self.events[name](self, data) end
+  end
   function inst:DoTaskInTime(delay, fn)
     local task = {at = now + delay, fn = fn, inst = self}
     function task:Cancel() self.cancelled = true end
@@ -116,6 +130,7 @@ local function Entity()
   function inst:AddComponent(name)
     local c = {}
     self.components[name] = c
+    self:AddTag("_" .. name)
     if name == "talker" then
       c.untiltime = 0
       function c:IsTalking() return self.untiltime > now end
@@ -128,10 +143,16 @@ local function Entity()
       function c:SetMaxHealth(value) self.maxhealth, self.currenthealth = value, value end
       function c:SetPercent(value) self.currenthealth = (self.maxhealth or 100) * value end
       function c:IsDead() return self.currenthealth == 0 end
+      function c:IsInvincible() return false end
+      function c:DoDelta(amount)
+        local before = self.currenthealth
+        self.currenthealth = math.max(0, math.min(self.maxhealth, before + amount))
+        return self.currenthealth - before
+      end
     elseif name == "combat" then
-      function c:SetDefaultDamage(value) self.damage = value end
+      function c:SetDefaultDamage(value) self.damage, self.defaultdamage = value, value end
       function c:SetAttackPeriod(value) self.period = value end
-      function c:SetRange(value) self.range = value end
+      function c:SetRange(value) self.attackrange, self.hitrange = value, value end
       function c:SetKeepTargetFunction(fn) self.keep = fn end
       function c:SetShouldAggroFn(fn) self.shouldaggro = fn end
       function c:CanTarget(target) return target ~= nil and target:IsValid() and not target.untargetable end
@@ -139,7 +160,15 @@ local function Entity()
         if target == nil or self.shouldaggro == nil or self.shouldaggro(inst, target) then self.target = target end
       end
       function c:DropTarget() self.target = nil end
-      function c:DoAttack(target) self.hits = (self.hits or 0) + 1 end
+      function c:StartAttack() end
+      function c:DoAttack(target)
+        self.hits = (self.hits or 0) + 1
+        local weapon = inst.components.inventory and inst.components.inventory.weapon
+        target.components.health:DoDelta(-(weapon and weapon.components.weapon.damage or self.damage))
+      end
+      function c:CanBeAttacked() return true end
+      function c:ShouldRecoil(attacker, weapon, damage) return false, damage end
+      function c:GetImpactSound() end
     elseif name == "inventory" then
       function c:GetEquippedItem() return self.weapon end
       function c:Equip(weapon) self.weapon = weapon end
@@ -147,6 +176,12 @@ local function Entity()
       function c:SetLeader(leader) self.leader = leader end
     elseif name == "locomotor" then
       function c:Stop() self.stopped = true end
+      c.StopMoving = c.Stop
+    elseif name == "weapon" then
+      function c:SetDamage(value) self.damage = value end
+      function c:GetDamage() return self.damage end
+      function c:CanRangedAttack() return false end
+      function c:OnAttack() end
     end
     return c
   end
@@ -166,6 +201,8 @@ function SpawnPrefab(name)
     elseif name == "publius" then
       inst:AddComponent("talker")
       inst:AddComponent("follower")
+    elseif name == "spear" then
+      inst:AddComponent("weapon"):SetDamage(TUNING.SPEAR_DAMAGE)
     end
   end
   inst.prefab = name
@@ -193,6 +230,7 @@ local function Player(userid)
   p:AddTag("player")
   p:AddComponent("talker")
   p:AddComponent("health"):SetMaxHealth(150)
+  p:AddComponent("combat")
   p.components.libellusprogress = Progress(p)
   table.insert(AllPlayers, p)
   return p, p.components.libellusprogress
@@ -235,7 +273,9 @@ test("layout has three to five armed WX-78 guards and a closed Lupa pen", functi
   for _, soldier in ipairs(casa._soldiers) do
     equal(soldier.AnimState.build, "wx78")
     equal(soldier.components.health.maxhealth, 1000)
+    equal(soldier.components.combat.damage, 25)
     equal(soldier.components.inventory.weapon.prefab, "spear")
+    equal(soldier.components.inventory.weapon.components.weapon.damage, 25)
     equal(soldier.graph, "SGmiles")
     equal(soldier._casa, casa)
   end
@@ -273,23 +313,26 @@ test("approach plays exactly two lines with Publius then Octavia", function()
   equal(progress.dialog, 3)
 end)
 
-test("brief entry attacks, then fleeing clears hate and preserves lines three to five", function()
+test("line three requires entry; lines four and five continue outside during combat", function()
   local player, progress, casa = Encounter()
   progress:SetProgress("ch2", 3)
+  player.position = casa.position + Vector3(0, 0, 8)
+  progress:DialogLoop(player)
+  advance(2)
+  equal(#speeches, 0)
   player.position = casa.position + Vector3(0, 0, 6)
-  advance(.11)
+  advance(2)
   for _, soldier in ipairs(casa._soldiers) do equal(soldier.components.combat.target, player) end
-  equal(progress._casa_entered, true)
   local soldier = casa:GetSoldier()
+  equal(speeches[1].speaker, soldier)
+  equal(speeches[1].content, DIALOG.ch2[3].content)
+  equal(soldier.facing.z, player.position.z)
   soldier.sg.state = "attack"
+  player.busy, progress._publius.busy = true, true
   player.position = casa.position + Vector3(0, 0, 7.01)
   advance(.11)
   for _, guard in ipairs(casa._soldiers) do equal(guard.components.combat.target, nil) end
   equal(soldier.sg.state, "idle")
-  progress:DialogLoop(player)
-  equal(speeches[1].speaker, soldier)
-  equal(speeches[1].content, DIALOG.ch2[3].content)
-  equal(soldier.facing.z, player.position.z)
   advance(10)
   equal(speeches[2].speaker, player)
   equal(speeches[3].speaker, progress._publius)
@@ -300,6 +343,25 @@ test("brief entry attacks, then fleeing clears hate and preserves lines three to
   player.position = casa.position + Vector3(0, 0, 6)
   advance(.11)
   for _, guard in ipairs(casa._soldiers) do equal(guard.components.combat.target, player) end
+end)
+
+test("saved lines four and five resume without an entry flag or nearby casa", function()
+  for _, dialog in ipairs({4, 5}) do
+    reset()
+    local player, progress = Encounter()
+    progress:SetProgress("ch2", dialog)
+    local saved = progress:OnSave()
+    local _, restored = Player()
+    restored:OnLoad(saved)
+    restored:EnsurePublius()
+    restored.inst.busy, restored._publius.busy = true, true
+    restored.inst.position = Vector3(200, 0, 200)
+    restored:DialogLoop(restored.inst)
+    advance(10)
+    equal(speeches[1].content, DIALOG.ch2[dialog].content)
+    equal(#speeches, 6 - dialog)
+    equal(restored.dialog, 6)
+  end
 end)
 
 test("rushing inside preserves approach speech before entry speech", function()
@@ -315,7 +377,7 @@ end)
 test("busy soldier can deliver warning and refused speech is retried", function()
   local player, progress, casa = Encounter()
   progress:SetProgress("ch2", 3)
-  progress._casa_entered = true
+  player.position = casa.position + Vector3(0, 0, 6)
   local guard = casa:GetSoldier()
   guard.busy = true
   guard.components.talker.refuse = true
@@ -327,7 +389,7 @@ test("busy soldier can deliver warning and refused speech is retried", function(
   equal(speeches[1].speaker, guard)
 end)
 
-test("ghosts, loading players, companions, and players outside cannot draw guard hate", function()
+test("ghosts, loading players, untargetable companions, and players outside cannot draw guard hate", function()
   local player, progress, casa = Encounter()
   local guard = casa:GetSoldier()
   player.position = casa.position + Vector3(0, 0, 6)
@@ -346,6 +408,37 @@ test("ghosts, loading players, companions, and players outside cannot draw guard
   equal(guard:CanGuardTarget(progress._publius), false)
 end)
 
+test("guards attack animals and monsters inside, excluding Lupa, allies, and walls", function()
+  local _, _, casa = Encounter()
+  local animal = SpawnPrefab("rabbit")
+  animal:AddComponent("health"):SetMaxHealth(100)
+  animal:AddComponent("combat")
+  animal.position = casa.position + Vector3(0, 0, 5)
+  advance(.11)
+  for _, guard in ipairs(casa._soldiers) do equal(guard.components.combat.target, animal) end
+  animal.position = casa.position + Vector3(0, 0, 8)
+  local monster = SpawnPrefab("spider")
+  monster:AddComponent("health"):SetMaxHealth(100)
+  monster:AddComponent("combat")
+  monster.position = casa.position + Vector3(1, 0, 5)
+  advance(.11)
+  for _, guard in ipairs(casa._soldiers) do equal(guard.components.combat.target, monster) end
+  -- Exclusion must hold even if Lupa gains combat components later.
+  casa._lupa:AddComponent("health"):SetMaxHealth(100)
+  casa._lupa:AddComponent("combat")
+  local guard = casa:GetSoldier()
+  equal(guard:CanGuardTarget(casa._lupa), false)
+  for _, ally in ipairs(casa._soldiers) do equal(guard:CanGuardTarget(ally), false) end
+  local wall = SpawnPrefab("wall_stone")
+  wall:AddTag("wall")
+  wall:AddComponent("combat")
+  wall.position = casa.position + Vector3(0, 0, 5)
+  equal(guard:CanGuardTarget(wall), false)
+  monster.components.health:SetPercent(0)
+  advance(.11)
+  for _, soldier in ipairs(casa._soldiers) do equal(soldier.components.combat.target, nil) end
+end)
+
 test("multiple players keep separate hate when one leaves", function()
   local first, _, casa = Encounter()
   local second = Player("second")
@@ -360,12 +453,10 @@ end)
 test("reload reuses owned casa and saves guard homes without repopulation", function()
   local player, progress, casa = Encounter()
   progress:SetProgress("ch2", 3)
-  progress._casa_entered = true
   local saved = progress:OnSave()
   local _, restored = Player()
   restored:OnLoad(saved)
   equal(restored:EnsureCasa(), casa)
-  equal(restored._casa_entered, true)
   local data, newents = {}, {}
   local refs = casa:OnSave(data)
   equal(#refs, #casa._soldiers + 1)
@@ -391,6 +482,7 @@ test("reload reuses owned casa and saves guard homes without repopulation", func
   advance(0)
   equal(serial, before)
   equal(second.components.inventory.weapon, weapon)
+  equal(weapon.components.weapon.damage, 25)
 end)
 
 -- Load the actual game common states when the runner provides them; otherwise
@@ -399,9 +491,11 @@ if package.preload["stategraphs/commonstates"] == nil then
   package.preload["stategraphs/commonstates"] = function()
     CommonStates = {AddIdle = noop, AddWalkStates = noop, AddRunStates = noop,
       AddCombatStates = function(states, timelines)
-        table.insert(states, {name = "attack", timeline = timelines.attacktimeline})
+        table.insert(states, {name = "attack", timeline = timelines.attacktimeline,
+          onenter = function(inst, target) inst.sg.statemem.target = target end})
       end}
-    CommonHandlers = {OnLocomote = noop, OnAttack = noop, OnDeath = noop}
+    CommonHandlers = {OnLocomote = function() return {} end,
+      OnAttack = function() return {} end, OnDeath = function() return {} end}
   end
 end
 function State(data) return data end
@@ -410,25 +504,84 @@ function TimeEvent(time, fn) return {time = time, fn = fn} end
 function FrameEvent(frame, fn) return TimeEvent(frame * FRAMES, fn) end
 function StateGraph(name, states, events, initial) return {states = states, events = events} end
 
-test("attack impact cannot damage a player after crossing the boundary", function()
+test("attack event passes the target to the state and deals 25 health damage", function()
   local player, _, casa = Encounter()
   local guard = casa:GetSoldier()
   local graph = dofile("scripts/stategraphs/SGmiles.lua")
-  local impact
+  local attack, handler
   for _, state in ipairs(graph.states) do
-    if state.name == "attack" then impact = state.timeline[1].fn end
+    if state.name == "attack" then attack = state end
   end
-  assert(impact ~= nil)
-  guard.sg.statemem.target = player
-  player.position = casa.position + Vector3(0, 0, 6)
+  for _, event in ipairs(graph.events) do
+    if event.event == "doattack" then handler = event.fn end
+  end
+  assert(attack ~= nil and handler ~= nil)
+  function guard.sg:GoToState(state, data)
+    self.state, self.statemem = state, {}
+    if state == "attack" then attack.onenter(guard, data) end
+  end
+  player.position = guard.position + Vector3(0, 0, 1)
   guard.components.combat:SetTarget(player)
-  impact(guard)
+  handler(guard, {target = player})
+  equal(guard.sg.statemem.target, player)
+  attack.timeline[1].fn(guard)
   equal(guard.components.combat.hits, 1)
+  equal(player.components.health.currenthealth, 125)
   player.position = casa.position + Vector3(0, 0, 7.01)
-  impact(guard)
+  attack.timeline[1].fn(guard)
   equal(guard.components.combat.hits, 1)
+  equal(player.components.health.currenthealth, 125)
   equal(guard.components.combat.target, nil)
 end)
+
+-- The external runner can preload these methods from the installed game's
+-- scripts.zip to verify weapon calculation and health damage through DST code.
+if package.preload["components/gamecombat"] ~= nil then
+  test("DST combat applies 25 health damage with a spear and while unarmed", function()
+    local player, _, casa = Encounter()
+    local guard = casa:GetSoldier()
+    local Combat = require("components/gamecombat")
+    local combat = guard.components.combat
+    combat.inst = guard
+    combat.externaldamagemultipliers = {Get = function() return 1 end}
+    for _, method in ipairs({"DoAttack", "CalcDamage", "GetWeapon", "CanHitTarget",
+      "CalcHitRangeSq", "GetHitRange", "CanExtinguishTarget", "CanLightTarget",
+      "CalcReflectedDamage", "ClearAttackTemps"}) do
+      combat[method] = Combat[method]
+    end
+    local defender = player.components.combat
+    defender.inst = player
+    defender.GetAttacked_Internal = Combat.GetAttacked_Internal
+    defender.externaldamagetakenmultipliers = {Get = function() return 1 end}
+    function CanApplyPlayerDamageMod(target) return target:HasTag("player") end
+    function IsRangedWeapon() return false end
+
+    local graph = dofile("scripts/stategraphs/SGmiles.lua")
+    local attack, handler
+    for _, state in ipairs(graph.states) do
+      if state.name == "attack" then attack = state end
+    end
+    for _, event in ipairs(graph.events) do
+      if event.event == "doattack" then handler = event.fn end
+    end
+    function guard.sg:GoToState(state, data)
+      self.state, self.statemem = state, {}
+      if state == "attack" then attack.onenter(guard, data) end
+    end
+    player.position = guard.position + Vector3(0, 0, 1)
+    combat:SetTarget(player)
+    handler(guard, {target = player})
+    attack.timeline[1].fn(guard)
+    equal(player.components.health.currenthealth, 125)
+    guard.components.inventory.weapon = nil
+    handler(guard, {target = player})
+    attack.timeline[1].fn(guard)
+    equal(player.components.health.currenthealth, 100)
+    player.position = casa.position + Vector3(0, 0, 7.01)
+    attack.timeline[1].fn(guard)
+    equal(player.components.health.currenthealth, 100)
+  end)
+end
 
 test("client encounter prefabs have visuals and no server-only components", function()
   TheWorld.ismastersim = false

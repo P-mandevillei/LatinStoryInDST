@@ -2,6 +2,9 @@ local HELPERS = require("helpers")
 
 local assets = {Asset("ANIM", "anim/pig_house.zip")}
 local prefabs = {"miles", "lupa", "wall_stone"}
+local TARGET_EXCLUDE_TAGS = {
+  "INLIMBO", "notarget", "playerghost", "structure", "wall", "libellus_soldier"
+}
 
 local function Contains(inst, target)
   if target == nil or not target:IsValid() then return false end
@@ -12,8 +15,11 @@ local function Contains(inst, target)
 end
 
 local function CanGuardTarget(inst, target)
-  return Contains(inst, target) and target:HasTag("player")
+  return Contains(inst, target) and target ~= inst._lupa and target.prefab ~= "lupa"
+    and not target:HasTag("libellus_soldier")
+    and not target:HasTag("structure") and not target:HasTag("wall")
     and not target:HasTag("playerghost") and not target:HasTag("notarget")
+    and not target:HasTag("INLIMBO") and target.components.combat ~= nil
     and not target.loadingprotection and target.components.health ~= nil
     and not target.components.health:IsDead()
 end
@@ -27,16 +33,11 @@ local function GetSoldier(inst)
 end
 
 local function UpdateGuards(inst)
-  for _, player in ipairs(AllPlayers) do
-    if CanGuardTarget(inst, player) then
-      local progress = player.components.libellusprogress
-      if progress ~= nil then progress:OnCasaEntered(inst) end
-    end
-  end
+  local targets
   for _, soldier in ipairs(inst._soldiers) do
     if soldier:IsValid() and not soldier.components.health:IsDead() then
       local combat = soldier.components.combat
-      if combat.target ~= nil and not CanGuardTarget(inst, combat.target) then
+      if combat.target ~= nil and not soldier:CanGuardTarget(combat.target) then
         combat:DropTarget()
         soldier:ClearBufferedAction()
         soldier.components.locomotor:Stop()
@@ -45,9 +46,14 @@ local function UpdateGuards(inst)
         end
       end
       if combat.target == nil then
-        for _, player in ipairs(AllPlayers) do
-          if CanGuardTarget(inst, player) and combat:CanTarget(player) then
-            combat:SetTarget(player)
+        if targets == nil then
+          local x, y, z = inst.Transform:GetWorldPosition()
+          targets = TheSim:FindEntities(x, y, z, HELPERS.CASA_HALF_SIZE * math.sqrt(2),
+            {"_combat", "_health"}, TARGET_EXCLUDE_TAGS)
+        end
+        for _, target in ipairs(targets) do
+          if soldier:CanGuardTarget(target) then
+            combat:SetTarget(target)
             break
           end
         end
@@ -70,9 +76,35 @@ local function SpawnWall(inst, x, z)
   if wall ~= nil then wall.components.health:SetPercent(1) end
 end
 
+local function AddCarpetFloor(inst)
+  if not TheWorld.ismastersim then return end
+
+  local map = TheWorld.Map
+  local x, y, z = inst.Transform:GetWorldPosition()
+
+  -- Sample just inside the outer walls.
+  local size = HELPERS.CASA_HALF_SIZE - 0.01
+
+  -- Convert world positions into terrain tile coordinates.
+  local tx1, tz1 = map:GetTileCoordsAtPoint(x - size, 0, z - size)
+  local tx2, tz2 = map:GetTileCoordsAtPoint(x + size, 0, z + size)
+
+  for tx = math.min(tx1, tx2), math.max(tx1, tx2) do
+    for tz = math.min(tz1, tz2), math.max(tz1, tz2) do
+      local oldtile = map:GetTile(tx, tz)
+
+      -- Replace existing land; avoid turning ocean or void into land.
+      if TileGroupManager:IsLandTile(oldtile) then
+        map:SetTile(tx, tz, WORLD_TILES.CARPET)
+      end
+    end
+  end
+end
+
 local function Populate(inst)
   if inst._populated then return end
   inst._populated = true
+  AddCarpetFloor(inst)
   local size = HELPERS.CASA_HALF_SIZE
   for n = -size, size do
     SpawnWall(inst, -size, n)

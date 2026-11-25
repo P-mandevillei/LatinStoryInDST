@@ -13,5 +13,14 @@ reign_of_giants_compatible = false
 priority = -1e30
 api_version = 10
 configuration_options = {
-  
+  {
+    name = "dialog_selector",
+    label = "Dialogue selector",
+    hover = "Show chapter and line selection in the in-game pause menu.",
+    options = {
+      {description = "Disabled", data = false},
+      {description = "Enabled", data = true}
+    },
+    default = false
+  }
 }

@@ -16,12 +16,19 @@ local function CanGuardTarget(inst, target)
 end
 
 local function Arm(inst)
-  if inst.components.health:IsDead()
-    or inst.components.inventory:GetEquippedItem(EQUIPSLOTS.HANDS) ~= nil then
+  if inst.components.health:IsDead() then return end
+  local inventory = inst.components.inventory
+  local weapon = inventory:GetEquippedItem(EQUIPSLOTS.HANDS)
+  if weapon ~= nil then
+    -- Update saved equipment too; weapon damage overrides default combat damage.
+    weapon.components.weapon:SetDamage(HELPERS.SOLDIER_DAMAGE)
     return
   end
   local spear = SpawnPrefab("spear")
-  if spear ~= nil then inst.components.inventory:Equip(spear) end
+  if spear ~= nil then
+    spear.components.weapon:SetDamage(HELPERS.SOLDIER_DAMAGE)
+    inventory:Equip(spear)
+  end
 end
 
 local function OnSave(inst, data)
@@ -54,6 +61,7 @@ local function fn()
     inst.AnimState:Hide(symbol)
   end
   inst:AddTag("character")
+  inst:AddTag("libellus_soldier")
   inst:AddTag("NOBLOCK")
   inst.displaynamefn = function() return "Miles" end
   inst:AddComponent("talker")
@@ -70,7 +78,7 @@ local function fn()
   inst:AddComponent("health")
   inst.components.health:SetMaxHealth(HELPERS.SOLDIER_HEALTH)
   inst:AddComponent("combat")
-  inst.components.combat:SetDefaultDamage(TUNING.SPEAR_DAMAGE)
+  inst.components.combat:SetDefaultDamage(HELPERS.SOLDIER_DAMAGE)
   inst.components.combat:SetAttackPeriod(2)
   inst.components.combat:SetRange(2)
   inst.components.combat:SetKeepTargetFunction(CanGuardTarget)

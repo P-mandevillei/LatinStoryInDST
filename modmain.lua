@@ -37,3 +37,5 @@ AddPlayerPostInit(function(inst)
     inst.components.libellusprogress:DialogLoop(inst)
   end)
 end)
+
+modimport("scripts/dialogselector.lua")
