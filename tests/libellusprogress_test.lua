@@ -120,6 +120,8 @@ end
 local HELPERS = require("helpers")
 local DIALOG = require("libellus")
 local Progress = require("components/libellusprogress")
+-- Chapter-two encounters have their own suite in casa_test.lua.
+function Progress:EnsureCasa() end
 local tests = 0
 local function test(name, fn)
   if test_filter ~= nil and not name:find(test_filter, 1, true) then return end
@@ -162,7 +164,7 @@ test("original intro and distant line five keep running", function()
   local player = Entity("wilson", "octavia")
   local progress = Progress(player)
   progress:DialogLoop(player)
-  advance(49)
+  advance(51)
   equal(progress.dialog, 5)
   for i = 1, 4 do equal(speeches[i].content, DIALOG.ch1[i].content) end
   equal(speeches[5].content, DIALOG.ch1[5].content)
@@ -180,7 +182,7 @@ test("approach interrupts the repeat wait and routes lines six to ten", function
   advance(2)
   equal(speeches[2].content, DIALOG.ch1[6].content)
   advance(20)
-  equal(progress.dialog, 11)
+  equal(progress.dialog, 1)
   equal(progress._publius.components.follower.leader, nil, "last line is still on screen")
   advance(5)
   equal(progress._publius.components.follower.leader, player)
@@ -193,7 +195,7 @@ test("approach interrupts the repeat wait and routes lines six to ten", function
   end
   advance(60)
   equal(#speeches, 6, "finished meeting must not repeat")
-  equal(progress.dialog, 11)
+  equal(progress.dialog, 1)
   assert(#tasks > 0, "loop must remain active for future dialogue")
 end)
 

@@ -12,12 +12,18 @@ Assets = {
 -- register prefabs
 PrefabFiles = {
   "test",
-  "publius"
+  "publius",
+  "casa",
+  "miles",
+  "lupa"
 }
 
 -- name prefabs
 HELPERS.add_quote("test", "This is a test", "test display")
 HELPERS.add_quote("publius", "Publius", "Poeta est.")
+HELPERS.add_quote("casa", "Casa Octaviae", "Casa mea pulchra est.")
+HELPERS.add_quote("miles", "Miles", "Militem timeo!")
+HELPERS.add_quote("lupa", "Lupa", "Lupam bene curo et amo.")
 
 modimport("items/hugTest.lua")
 
