@@ -122,6 +122,8 @@ local DIALOG = require("libellus")
 local Progress = require("components/libellusprogress")
 -- Chapter-two encounters have their own suite in casa_test.lua.
 function Progress:EnsureCasa() end
+function Progress:EnsureFarm() end
+function Progress:EnsureNavis() end
 local tests = 0
 local function test(name, fn)
   if test_filter ~= nil and not name:find(test_filter, 1, true) then return end

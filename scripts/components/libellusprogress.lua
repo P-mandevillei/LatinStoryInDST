@@ -35,6 +35,7 @@ function LibellusProgress:OnSave()
   local data = {
     chapter = self.chapter,
     dialog = self.dialog,
+    casa_cleared = self._casa_cleared,
     spawnpoint = point ~= nil and {x = point.x, y = point.y, z = point.z} or nil
   }
   -- Once recruited, save Publius with the player just like DST's pets. This
@@ -51,6 +52,7 @@ end
 function LibellusProgress:OnLoad(data)
   if data ~= nil then
     self:SetProgress(data.chapter, data.dialog)
+    self._casa_cleared = data.casa_cleared
     if data.spawnpoint ~= nil then
       local point = data.spawnpoint
       self._spawnpoint = Vector3(point.x, point.y, point.z)
@@ -137,6 +139,71 @@ function LibellusProgress:EnsureCasa()
   return casa
 end
 
+function LibellusProgress:EnsureFarm()
+  if TheWorld:HasTag("cave") then return end
+  if self._farm ~= nil and self._farm:IsValid() then return self._farm end
+  if self.inst.userid ~= nil then
+    for _, ent in pairs(Ents) do
+      if ent.prefab == "agricola_farm" and ent._libellus_owneruserid == self.inst.userid then
+        self._farm = ent
+        return ent
+      end
+    end
+  end
+  self._spawnpoint = self._spawnpoint or self.inst:GetPosition()
+  if self._next_farm_retry ~= nil and GetTime() < self._next_farm_retry then return end
+  self._next_farm_retry = GetTime() + HELPERS.FARM_SPAWN_RETRY_INTERVAL
+  local point = HELPERS.FindFarmSpawnPoint(self._spawnpoint)
+  if point == nil then return end
+  local farm = SpawnPrefab("agricola_farm")
+  if farm ~= nil then
+    farm.Transform:SetPosition(point:Get())
+    farm._libellus_owneruserid = self.inst.userid
+    self._farm = farm
+  end
+  return farm
+end
+
+function LibellusProgress:EnsureNavis()
+  if TheWorld:HasTag("cave") then return end
+  if self._navis ~= nil and self._navis:IsValid() then return self._navis end
+  if self.inst.userid ~= nil then
+    for _, ent in pairs(Ents) do
+      if ent.prefab == "navis" and ent._libellus_owneruserid == self.inst.userid then
+        self._navis = ent
+        return ent
+      end
+    end
+  end
+  self._spawnpoint = self._spawnpoint or self.inst:GetPosition()
+  if self._next_navis_retry ~= nil and GetTime() < self._next_navis_retry then return end
+  self._next_navis_retry = GetTime() + HELPERS.NAVIS_SPAWN_RETRY_INTERVAL
+  local point = HELPERS.FindNavisSpawnPoint(self._spawnpoint)
+  if point == nil then return end
+  local navis = SpawnPrefab("navis")
+  if navis ~= nil then
+    navis.Transform:SetPosition(point:Get())
+    navis._libellus_owneruserid = self.inst.userid
+    self._navis = navis
+  end
+  return navis
+end
+
+function LibellusProgress:GetShip()
+  local ship = self._navis ~= nil and self._navis:IsValid() and self._navis._ship or nil
+  return ship ~= nil and ship:IsValid() and ship or nil
+end
+
+function LibellusProgress:GetSenex()
+  local senex = self._navis ~= nil and self._navis:IsValid() and self._navis._senex or nil
+  return senex ~= nil and senex:IsValid() and not senex.components.health:IsDead() and senex or nil
+end
+
+function LibellusProgress:GetAgricola()
+  local farmer = self._farm ~= nil and self._farm:IsValid() and self._farm._agricola or nil
+  return farmer ~= nil and farmer:IsValid() and farmer or nil
+end
+
 local function IsBusy(inst)
   local talker = inst.components.talker
   return talker == nil or inst.loadingprotection or inst:HasTag("playerghost")
@@ -154,7 +221,18 @@ end
 
 function LibellusProgress:DialogLoop(inst)
   local publius = not inst.loadingprotection and self:EnsurePublius() or nil
-  if not inst.loadingprotection then self:EnsureCasa() end
+  if not inst.loadingprotection then
+    self:EnsureCasa()
+    self:EnsureFarm()
+    self:EnsureNavis()
+    if self._casa_cleared and self._casa ~= nil and self._casa:IsValid() then
+      self._casa:ClearEncounter()
+    end
+  end
+  if not self._checking_casa_entry then
+    self._checking_casa_entry = true
+    self:CheckCasaEntry(inst)
+  end
   -- Progress points past the last line as soon as it starts. Wait until both
   -- speech bubbles finish before starting the permanent follower relationship.
   if publius ~= nil and (self.chapter ~= "ch1" or self.dialog > DIALOG.CH1_SEP[3])
@@ -166,10 +244,11 @@ function LibellusProgress:DialogLoop(inst)
   end
 
   local chapter, dialog = self:GetProgress()
-  local casa_dialog = chapter == "ch2" and dialog > DIALOG.CH2_SEP[1]
-    and dialog <= DIALOG.CH2_SEP[2]
-  -- The entry exchange continues while the player flees or fights.
-  if not casa_dialog and (IsBusy(inst) or (publius ~= nil and IsBusy(publius))) then
+  local ship_dialog = chapter == "ch3" and dialog > DIALOG.CH3_SEP[1]
+    and dialog <= DIALOG.CH3_SEP[2]
+  if (self._entry_speech_until ~= nil and GetTime() < self._entry_speech_until)
+    or inst.loadingprotection or inst:HasTag("playerghost") or inst.components.talker == nil
+    or (not ship_dialog and (IsBusy(inst) or (publius ~= nil and IsBusy(publius)))) then
     inst:DoTaskInTime(HELPERS.BUSY_INTERVAL, function(inst)
       self:DialogLoop(inst)
     end)
@@ -184,7 +263,12 @@ function LibellusProgress:DialogLoop(inst)
     elseif dialog <= DIALOG.CH1_SEP[3] then say_func = self.SayChapterOneMeeting end
   elseif chapter == "ch2" then
     if dialog <= DIALOG.CH2_SEP[1] then say_func = self.SayChapterTwoApproach
-    elseif dialog <= DIALOG.CH2_SEP[2] then say_func = self.SayChapterTwoEntry end
+    elseif dialog == DIALOG.CH2_SEP[3] then say_func = self.SayChapterTwoWait
+    elseif dialog <= DIALOG.CH2_SEP[4] and dialog > DIALOG.CH2_SEP[3] then
+      say_func = self.SayChapterTwoFarmer
+    end
+  elseif chapter == "ch3" then
+    if dialog <= DIALOG.CH3_SEP[2] then say_func = self.SayChapterThreeShip end
   end
   local delay = say_func(self, inst, chapter, dialog, revision)
   inst:DoTaskInTime(delay, function(inst)
@@ -274,14 +358,10 @@ end
 
 function LibellusProgress:SayChapterTwoLine(inst, chapter, dialog, revision)
   local line = DIALOG[chapter][dialog]
-  local actors = {Octavia = inst, Publius = self._publius,
-    Milites = self._casa ~= nil and self._casa:GetSoldier() or nil}
+  local actors = {Octavia = inst, Publius = self._publius}
   local speaker = actors[line.name]
-  local casa_dialog = dialog > DIALOG.CH2_SEP[1] and dialog <= DIALOG.CH2_SEP[2]
-  -- Combat animations must not hold up the entry exchange.
   if speaker == nil or not speaker:IsValid() or speaker.components.talker == nil
-    or speaker.components.talker:IsTalking()
-    or (not casa_dialog and IsBusy(speaker)) then
+    or IsBusy(speaker) then
     return HELPERS.BUSY_INTERVAL
   end
   local facing = actors[line.facing]
@@ -290,11 +370,7 @@ function LibellusProgress:SayChapterTwoLine(inst, chapter, dialog, revision)
   end
   return self:Say(speaker, chapter, dialog, revision, line.content,
     function(d)
-      if d <= DIALOG.CH2_SEP[2] and d > DIALOG.CH2_SEP[1] then
-        return chapter, (d-DIALOG.CH2_SEP[1])%3 + 1 + DIALOG.CH2_SEP[1]
-      else
-        return chapter, d+1
-      end
+      return chapter, d+1
     end,
     function() return HELPERS.DIALOG_INTERVAL end)
 end
@@ -308,13 +384,124 @@ function LibellusProgress:SayChapterTwoApproach(inst, chapter, dialog, revision)
   return self:SayChapterTwoLine(inst, chapter, dialog, revision)
 end
 
-function LibellusProgress:SayChapterTwoEntry(inst, chapter, dialog, revision)
+-- Entry detection runs independently of speech timing and story progress.
+function LibellusProgress:CheckCasaEntry(inst)
   local casa = self._casa
-  if dialog == DIALOG.CH2_SEP[1] + 1
-    and (casa == nil or not casa:IsValid() or not casa:Contains(inst)) then
+  local inside = casa ~= nil and casa:IsValid() and casa:Contains(inst)
+    and not inst.loadingprotection and not inst:HasTag("playerghost")
+  if inside and not self._inside_casa and not casa._encounter_cleared then
+    self:SayChapterTwoEntry(inst)
+  end
+  self._inside_casa = inside
+  inst:DoTaskInTime(HELPERS.CASA_CHECK_INTERVAL, function(inst)
+    self:CheckCasaEntry(inst)
+  end)
+end
+
+function LibellusProgress:SayChapterTwoEntry(inst)
+  for _, soldier in ipairs(self._casa._soldiers) do
+    if soldier:IsValid() and not soldier.components.health:IsDead()
+      and soldier.components.talker ~= nil then
+      local line = DIALOG.ch2[math.random(DIALOG.CH2_SEP[1] + 1, DIALOG.CH2_SEP[2] - 1)]
+      soldier:FacePoint(inst.Transform:GetWorldPosition())
+      soldier.components.talker:Say(line.content, HELPERS.DIALOG_INTERVAL)
+    end
+  end
+  local talker = inst.components.talker
+  if talker == nil then return end
+  if self._publius ~= nil and self._publius:IsValid() then
+    inst:FacePoint(self._publius.Transform:GetWorldPosition())
+  end
+  talker:Say(DIALOG.ch2[DIALOG.CH2_SEP[2]].content, HELPERS.DIALOG_INTERVAL)
+  if not talker:IsTalking() then return end
+  self._entry_speech_until = GetTime() + HELPERS.DIALOG_INTERVAL
+  local speech_end = self._entry_speech_until
+  inst:DoTaskInTime(HELPERS.DIALOG_INTERVAL, function()
+    -- Reentry can restart line five. Only the latest speech may advance,
+    -- and its completion must never rewind a later story event.
+    if self._entry_speech_until ~= speech_end then return end
+    local chapter, dialog = self:GetProgress()
+    if chapter == "ch2" and dialog > DIALOG.CH2_SEP[1]
+      and dialog <= DIALOG.CH2_SEP[2] then
+      self:SetProgress("ch2", DIALOG.CH2_SEP[3])
+    end
+  end)
+end
+
+function LibellusProgress:SayChapterTwoWait(inst, chapter, dialog, revision)
+  local farmer = self:GetAgricola()
+  if farmer ~= nil and inst:IsNear(farmer, HELPERS.AGRICOLA_MEETING_DISTANCE) then
+    self:SetProgress(chapter, DIALOG.CH2_SEP[3] + 1)
+    return self:SayChapterTwoFarmer(inst, chapter, DIALOG.CH2_SEP[3] + 1, self._progress_revision)
+  end
+  if self._next_ch2_repeat_time ~= nil and GetTime() < self._next_ch2_repeat_time then
     return HELPERS.CHECK_PROGRESS_INTERVAL
   end
-  return self:SayChapterTwoLine(inst, chapter, dialog, revision)
+  local publius = self._publius
+  if publius == nil or not publius:IsValid() or IsBusy(publius) then
+    return HELPERS.BUSY_INTERVAL
+  end
+  publius:FacePoint(inst.Transform:GetWorldPosition())
+  return self:Say(publius, chapter, dialog, revision, DIALOG.ch2[dialog].content,
+    function(d) return chapter, d end,
+    function()
+      self._next_ch2_repeat_time = GetTime() + HELPERS.DIALOG_INTERVAL + HELPERS.REPEAT_INTERVAL
+      return HELPERS.CHECK_PROGRESS_INTERVAL
+    end)
+end
+
+function LibellusProgress:SayChapterTwoFarmer(inst, chapter, dialog, revision)
+  local farmer = self:GetAgricola()
+  if farmer == nil or not inst:IsNear(farmer, HELPERS.AGRICOLA_MEETING_DISTANCE) then
+    return HELPERS.CHECK_PROGRESS_INTERVAL
+  end
+  farmer._conversation_until = GetTime() + HELPERS.DIALOG_INTERVAL + HELPERS.BUSY_INTERVAL
+  if self._farmer_finish_revision == revision then return HELPERS.CHECK_PROGRESS_INTERVAL end
+  local line = DIALOG[chapter][dialog]
+  local speaker = line.name == "Agricola" and farmer or inst
+  if IsBusy(speaker) then return HELPERS.BUSY_INTERVAL end
+  inst:FacePoint(farmer.Transform:GetWorldPosition())
+  farmer:FacePoint(inst.Transform:GetWorldPosition())
+  return self:Say(speaker, chapter, dialog, revision, line.content,
+    function(d) return chapter, d < DIALOG.CH2_SEP[4] and d + 1 or d end,
+    function()
+      if dialog == DIALOG.CH2_SEP[4] then
+        local finish_revision = self._progress_revision
+        self._farmer_finish_revision = finish_revision
+        inst:DoTaskInTime(HELPERS.DIALOG_INTERVAL, function()
+          if self:SetProgress("ch3", 1, finish_revision) then
+            self._casa_cleared = true
+            if self._casa ~= nil and self._casa:IsValid() then self._casa:ClearEncounter() end
+          end
+        end)
+      end
+      return HELPERS.DIALOG_INTERVAL
+    end)
+end
+
+function LibellusProgress:SayChapterThreeShip(inst, chapter, dialog, revision)
+  local ship = self:GetShip()
+  local first = dialog == DIALOG.CH3_SEP[1]
+  if ship == nil or not inst:IsNear(ship, first and HELPERS.NAVIS_SEE_DISTANCE or HELPERS.NAVIS_NEAR_DISTANCE)
+    or (first and not CanEntitySeeTarget(inst, ship)) then
+    return HELPERS.CHECK_PROGRESS_INTERVAL
+  end
+  local actors = {Octavia = inst, Publius = self._publius, Senex = self:GetSenex()}
+  local line = DIALOG[chapter][dialog]
+  local speaker = actors[line.name]
+  -- Boarding combat continues during the exchange; speech bubbles still wait
+  -- for their own speaker's preceding line to finish.
+  if speaker == nil or not speaker:IsValid() or speaker.components.talker == nil
+    or speaker.components.talker:IsTalking() then
+    return HELPERS.BUSY_INTERVAL
+  end
+  local facing = actors[line.facing]
+  if facing ~= nil and facing:IsValid() then
+    speaker:FacePoint(facing.Transform:GetWorldPosition())
+  end
+  return self:Say(speaker, chapter, dialog, revision, line.content,
+    function(d) return chapter, d + 1 end,
+    function() return HELPERS.DIALOG_INTERVAL end)
 end
 
 return LibellusProgress

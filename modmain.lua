@@ -15,7 +15,12 @@ PrefabFiles = {
   "publius",
   "casa",
   "miles",
-  "lupa"
+  "lupa",
+  "agricola",
+  "agricola_farm",
+  "agricola_crop",
+  "navis",
+  "senex"
 }
 
 -- name prefabs
@@ -24,6 +29,8 @@ HELPERS.add_quote("publius", "Publius", "Poeta est.")
 HELPERS.add_quote("casa", "Casa Octaviae", "Casa mea pulchra est.")
 HELPERS.add_quote("miles", "Miles", "Militem timeo!")
 HELPERS.add_quote("lupa", "Lupa", "Lupam bene curo et amo.")
+HELPERS.add_quote("agricola", "Agricola", "Agricola bonus est.")
+HELPERS.add_quote("senex", "Senex", "Militi similis est.")
 
 modimport("items/hugTest.lua")
 

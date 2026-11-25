@@ -32,6 +32,16 @@ local function GetSoldier(inst)
   end
 end
 
+local function ClearEncounter(inst)
+  inst._encounter_cleared = true
+  for _, soldier in ipairs(inst._soldiers) do
+    if soldier:IsValid() then soldier:Remove() end
+  end
+  inst._soldiers = {}
+  if inst._lupa ~= nil and inst._lupa:IsValid() then inst._lupa:Remove() end
+  inst._lupa = nil
+end
+
 local function UpdateGuards(inst)
   local targets
   for _, soldier in ipairs(inst._soldiers) do
@@ -125,6 +135,7 @@ local function Populate(inst)
     SpawnWall(inst, 2, z)
     SpawnWall(inst, 6, z)
   end
+  if inst._encounter_cleared then return end
   inst._lupa = SpawnAt(inst, "lupa", 4, -3)
 
   local count = math.random(3, 5)
@@ -141,6 +152,7 @@ end
 local function OnSave(inst, data)
   data.owneruserid = inst._libellus_owneruserid
   data.populated = inst._populated
+  data.encounter_cleared = inst._encounter_cleared
   data.soldiers = {}
   local refs = {}
   for _, soldier in ipairs(inst._soldiers) do
@@ -160,6 +172,7 @@ local function OnLoad(inst, data)
   if data ~= nil then
     inst._libellus_owneruserid = data.owneruserid
     inst._populated = data.populated
+    inst._encounter_cleared = data.encounter_cleared
   end
 end
 
@@ -174,6 +187,7 @@ local function OnLoadPostPass(inst, newents, data)
   end
   inst._lupa = data.lupa ~= nil and newents[data.lupa] ~= nil
     and newents[data.lupa].entity or nil
+  if inst._encounter_cleared then ClearEncounter(inst) end
 end
 
 local function fn()
@@ -197,6 +211,7 @@ local function fn()
   inst.Contains = Contains
   inst.CanGuardTarget = CanGuardTarget
   inst.GetSoldier = GetSoldier
+  inst.ClearEncounter = ClearEncounter
   inst.OnSave = OnSave
   inst.OnLoad = OnLoad
   inst.OnLoadPostPass = OnLoadPostPass
