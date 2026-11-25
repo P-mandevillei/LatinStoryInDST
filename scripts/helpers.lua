@@ -33,6 +33,98 @@ HELPERS.NAVIS_NEAR_DISTANCE = 12
 HELPERS.SENEX_HEALTH = 1000
 HELPERS.SENEX_DAMAGE = 25
 HELPERS.SENEX_CHECK_INTERVAL = .1
+HELPERS.PASSER_SPAWN_RETRY_INTERVAL = 20
+HELPERS.PASSER_SEE_DISTANCE = 25
+HELPERS.PASSER_MEETING_DISTANCE = 5
+HELPERS.PASSER_REFLECTION_DELAY = 15
+HELPERS.PASSER_GROVE_SIZE = 27
+HELPERS.PASSER_FIREBREAK = 16
+HELPERS.PASSER_GROVE_OFFSET = HELPERS.PASSER_GROVE_SIZE / 2 + HELPERS.PASSER_FIREBREAK + 3
+
+function HELPERS.CanClearForPasser(ent)
+  if ent:HasTag("structure") or ent:HasTag("character") or ent:HasTag("player")
+    or ent:HasTag("libellus_burnt_tree") or ent._libellus_owneruserid ~= nil then return false end
+  if ent.components.inventoryitem ~= nil then
+    return ent.components.inventoryitem:GetGrandOwner() == nil
+  end
+  return ent:HasTag("tree") or ent:HasTag("plant") or ent:HasTag("grass")
+    or ent:HasTag("sapling") or ent:HasTag("stump")
+    or (ent.components.health == nil and
+      (ent.components.pickable ~= nil or ent.components.workable ~= nil))
+end
+
+-- The cage stands in front of the clearing, beyond even the firebreak.
+function HELPERS.GetPasserClearing(point, dx, dz)
+  return GLOBAL.Vector3(point.x + dx * HELPERS.PASSER_GROVE_OFFSET, 0,
+    point.z + dz * HELPERS.PASSER_GROVE_OFFSET)
+end
+
+function HELPERS.GetPasserClearingEntities(center)
+  local half = HELPERS.PASSER_GROVE_SIZE / 2 + HELPERS.PASSER_FIREBREAK
+  local result = {}
+  for _, ent in ipairs(GLOBAL.TheSim:FindEntities(center.x, 0, center.z, half * math.sqrt(2),
+    nil, {"FX", "DECOR", "INLIMBO"})) do
+    local x, _, z = ent.Transform:GetWorldPosition()
+    if math.abs(x - center.x) <= half and math.abs(z - center.z) <= half then
+      table.insert(result, ent)
+    end
+  end
+  return result
+end
+
+function HELPERS.CanPreparePasserSite(point, dx, dz)
+  local map = GLOBAL.TheWorld.Map
+  if map:GetTileAtPoint(point.x, 0, point.z) ~= GLOBAL.WORLD_TILES.FOREST
+    or not map:IsPassableAtPoint(point.x, 0, point.z) or map:IsPointNearHole(point) then return false end
+  for _, ent in ipairs(GLOBAL.TheSim:FindEntities(point.x, 0, point.z, 2,
+    nil, {"FX", "DECOR", "INLIMBO"})) do
+    if ent:GetPhysicsRadius(0) > 0 or ent:HasTag("structure") then return false end
+  end
+  local center = HELPERS.GetPasserClearing(point, dx, dz)
+  local half = HELPERS.PASSER_GROVE_SIZE / 2
+  for x = -half, half, 3 do
+    for z = -half, half, 3 do
+      local sample = GLOBAL.Vector3(center.x + x, 0, center.z + z)
+      if not map:IsPassableAtPoint(sample.x, 0, sample.z) or map:IsPointNearHole(sample) then return false end
+    end
+  end
+  for _, ent in ipairs(HELPERS.GetPasserClearingEntities(center)) do
+    if not HELPERS.CanClearForPasser(ent) then return false end
+  end
+  return true
+end
+
+function HELPERS.FindPasserSpawnPoint(origin)
+  local map = GLOBAL.TheWorld.Map
+  local width, height = map:GetSize()
+  local points = {}
+  for x = 0, width - 1 do
+    for z = 0, height - 1 do
+      if map:GetTile(x, z) == GLOBAL.WORLD_TILES.FOREST then
+        local px, _, pz = map:GetTileCenterPoint(x, z)
+        table.insert(points, {point = GLOBAL.Vector3(px, 0, pz), distance = (px-origin.x)^2 + (pz-origin.z)^2})
+      end
+    end
+  end
+  table.sort(points, function(a, b) return a.distance < b.distance end)
+  local head = 1
+  local directions = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}}
+  while head <= #points do
+    local band, limit = {}, (math.sqrt(points[head].distance) + 16)^2
+    while head <= #points and points[head].distance <= limit do
+      table.insert(band, points[head].point)
+      head = head + 1
+    end
+    while #band > 0 do
+      local point = table.remove(band, math.random(#band))
+      local first = math.random(4)
+      for i = 0, 3 do
+        local dir = directions[(first + i - 1) % 4 + 1]
+        if HELPERS.CanPreparePasserSite(point, dir[1], dir[2]) then return point, dir[1], dir[2] end
+      end
+    end
+  end
+end
 
 -- Search outward from the saved spawn, randomizing the bearing in each band.
 -- Check the whole hull footprint against land, void, and existing platforms.

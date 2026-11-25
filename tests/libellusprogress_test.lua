@@ -124,6 +124,7 @@ local Progress = require("components/libellusprogress")
 function Progress:EnsureCasa() end
 function Progress:EnsureFarm() end
 function Progress:EnsureNavis() end
+function Progress:EnsurePasser() end
 local tests = 0
 local function test(name, fn)
   if test_filter ~= nil and not name:find(test_filter, 1, true) then return end
@@ -452,5 +453,122 @@ test("server prefab labels the map before its entity name is initialized", funct
   equal(publius:GetDisplayName(), nil)
   equal(publius.components.maprevealable.displayname, STRINGS.NAMES.PUBLIUS)
 end)
+
+test("Publius loads human boat-hop animations and configures every hop phase", function()
+  local assets = {}
+  for _, asset in ipairs(prefab.assets) do assets[asset.path] = true end
+  assert(assets["anim/player_boat_jump.zip"], "boat hopping requires its own animation bank")
+  local savedstates, savedhandlers = CommonStates, CommonHandlers
+  local savedmodule = package.loaded["stategraphs/commonstates"]
+  local hop
+  CommonStates = {AddIdle = function() end, AddWalkStates = function() end,
+    AddRunStates = function() end,
+    AddHopStates = function(states, wait, anims, timelines, sound, falling, data)
+      hop = {wait = wait, anims = anims, data = data}
+    end}
+  CommonHandlers = {OnLocomote = function() return {} end, OnHop = function() return {} end}
+  package.loaded["stategraphs/commonstates"] = true
+  FRAMES = 1/30
+  function StateGraph(name, states, events) return {states = states, events = events} end
+  dofile("scripts/stategraphs/SGpublius.lua")
+  equal(hop.wait, true)
+  equal(hop.anims.pre, "boat_jump_pre")
+  equal(hop.anims.loop, "boat_jump_loop")
+  equal(hop.anims.pst, "boat_jump_pst")
+  equal(hop.data.start_embarking_pre_frame, 4 * FRAMES)
+  CommonStates, CommonHandlers = savedstates, savedhandlers
+  package.loaded["stategraphs/commonstates"] = savedmodule
+end)
+
+-- An external runner can preload commonstates from the installed scripts.zip.
+-- This exercises DST's real transition/cleanup logic rather than a copy of it.
+if package.preload["stategraphs/commonstates"] ~= nil then
+  test("DST boat hops board, disembark, and cancel without losing Publius", function()
+    FRAMES = 1/30
+    COLLISION = {GROUND = 1}
+    function State(data) return data end
+    function EventHandler(event, fn) return {event = event, fn = fn} end
+    function TimeEvent(time, fn) return {time = time, fn = fn} end
+    function FrameEvent(frame, fn) return TimeEvent(frame * FRAMES, fn) end
+    function FunctionOrValue(value, ...) return type(value) == "function" and value(...) or value end
+    local graph = dofile("scripts/stategraphs/SGpublius.lua")
+    local states = {}
+    for _, state in ipairs(graph.states) do states[state.name] = state end
+    local inst, boat, leader = Entity("publius"), Entity("boat"), Entity("wilson")
+    inst.components.follower:SetLeader(leader)
+    inst.ForceFacePoint = function() end
+    function inst:RemoveTag(tag) self.tags[tag] = nil end
+    inst.SoundEmitter = {PlaySound = function() end}
+    inst.Physics = {mask = 123}
+    function inst.Physics:GetCollisionMask() return self.mask end
+    function inst.Physics:SetCollisionMask(mask) self.mask = mask end
+    function inst.Physics:ClearLocalCollisionMask() end
+    inst.AnimState = {}
+    function inst.AnimState:PlayAnimation(anim) self.anim = anim end
+    function inst.AnimState:IsCurrentAnimation(anim) return self.anim == anim end
+    function inst.AnimState:GetCurrentAnimationLength() return 1 end
+    inst.components.locomotor = {isrunning = false, StopMoving = function() end, Stop = function() end}
+    inst.components.embarker = {}
+    function inst.components.embarker:GetEmbarkPosition() return 2, 0 end
+    function inst.components.embarker:StartMoving() self.moving = true end
+    function inst.components.embarker:Cancel() self.moving = false end
+    function inst.components.embarker:Embark()
+      inst.platform = self.destination
+      self.moving = false
+    end
+    function inst:GetCurrentPlatform() return self.platform end
+    function inst:DoTaskInTime(delay, fn) equal(delay, 0); fn(self) end
+    inst.sg = {statemem = {}}
+    function inst.sg:SetTimeout(timeout) self.timeout = timeout end
+    function inst.sg:HasStateTag(tag)
+      for _, value in ipairs(self.currentstate.tags or {}) do if value == tag then return true end end
+      return false
+    end
+    function inst.sg:HasAnyStateTag(...)
+      for _, tag in ipairs({...}) do if self:HasStateTag(tag) then return true end end
+      return false
+    end
+    function inst.sg:GoToState(name, data)
+      local old = self.currentstate
+      if old ~= nil and old.onexit ~= nil then old.onexit(inst) end
+      self.currentstate, self.statemem = states[name], {}
+      if self.currentstate.onenter ~= nil then self.currentstate.onenter(inst, data) end
+    end
+    function inst:PushEvent(event)
+      for _, handler in ipairs(self.sg.currentstate.events or {}) do
+        if handler.event == event then handler.fn(self); return end
+      end
+      for _, handler in ipairs(graph.events) do
+        if handler.event == event then handler.fn(self); return end
+      end
+    end
+    inst.sg:GoToState("idle")
+    for _, destination in ipairs({boat, false, boat}) do
+      inst.components.embarker.destination = destination or nil
+      inst:PushEvent("onhop")
+      equal(inst.AnimState.anim, "boat_jump_pre")
+      states.hop_pre.ontimeout(inst)
+      inst:PushEvent("animover")
+      equal(inst.AnimState.anim, "boat_jump_loop")
+      equal(inst:HasTag("ignorewalkableplatforms"), true)
+      inst:PushEvent("done_embark_movement")
+      equal(inst.AnimState.anim, "boat_jump_pst")
+      equal(inst:HasTag("ignorewalkableplatforms"), false)
+      equal(inst:GetCurrentPlatform(), destination or nil)
+      inst:PushEvent("animover")
+      equal(inst.sg.currentstate.name, "idle")
+      equal(inst.Physics.mask, 123)
+      equal(inst.components.follower.leader, leader)
+      equal(inst:IsValid(), true)
+    end
+    inst:PushEvent("onhop")
+    inst:PushEvent("animover")
+    inst:PushEvent("cancelhop")
+    inst:PushEvent("animover")
+    equal(inst.sg.currentstate.name, "idle")
+    equal(inst:HasTag("ignorewalkableplatforms"), false)
+    equal(inst.components.embarker.moving, false)
+  end)
+end
 
 print(string.format("%d dialogue and spawning tests passed", tests))

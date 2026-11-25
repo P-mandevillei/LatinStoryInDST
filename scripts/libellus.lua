@@ -44,17 +44,35 @@ local DIALOG = {
 
     {name="Octavia", content="Animum magnum cum industriā diu petimus sed non videmus."},
     {name="Publius", content="Forma animi magni non scio!"},
+
     {name="Passer", content="Lacrimas miseras audio. Ecce! Callidus sum."},
+
     {name="Passer", content="Animus magnus oculis boni hominis videri non potest, sed sentiri debet."},
     {name="Octavia", content="Te vinculis libero."},
-
     {name="Octavia", content="Quid scis de rege?"},
+  },
+  ch4 = {
+    {name="Passer", content="Ego cum amicis meis in silvā semper una manebam."},
+    {name="Passer", content="Sed silva ardebat."},
+    {name="Passer", content="Homines animum magnum petere silvamque delere cupiebant."},
+    {name="Passer", content="Multi pugnabant sed mors eos cepit."},
+    {name="Passer", content="Ego felix eram et a flammis fugere poteram."},
+    {name="Passer", content="Dum fugiebam, speluncam celebrem vidi donaque deae in speluncā esse dicuntur."},
+    {name="Octavia", content="Donane habes nunc?"},
+    {name="Passer", content="Non habeo. Rex animalium in silvā dona habet."},
+
+    {name="Octavia", content="Pigrum regem animalium in silvā iacere video!"},
+    {name="Rex animalium", content="Discedite, homines! Nolite in silvam venire!"},
+    {name="Octavia", content="Unusquisque nostrum propter ignes dolet, sed a timore regis vinci non debemus."},
+    {name="Octavia", content="Si auxilium nobis dederis, contra regem hominum tecum pugnabimus."},
+    {name="Rex animalium", content="Bene. Dona divitia vobis do."},
   }
 }
 
 DIALOG.CH1_SEP = {4, 5, #DIALOG.ch1}
 DIALOG.CH2_SEP = {2, 5, 6, 13, #DIALOG.ch2}
-DIALOG.CH3_SEP = {1, 8, 13, #DIALOG.ch3}
+DIALOG.CH3_SEP = {1, 8, 10, 11, #DIALOG.ch3}
+DIALOG.CH4_SEP = {8, #DIALOG.ch4}
 
 -- debug only
 local function printTable(tbl, indent)

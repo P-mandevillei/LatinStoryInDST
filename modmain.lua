@@ -20,7 +20,10 @@ PrefabFiles = {
   "agricola_farm",
   "agricola_crop",
   "navis",
-  "senex"
+  "senex",
+  "passer",
+  "passer_grove",
+  "passer_burnt_tree"
 }
 
 -- name prefabs
@@ -31,6 +34,7 @@ HELPERS.add_quote("miles", "Miles", "Militem timeo!")
 HELPERS.add_quote("lupa", "Lupa", "Lupam bene curo et amo.")
 HELPERS.add_quote("agricola", "Agricola", "Agricola bonus est.")
 HELPERS.add_quote("senex", "Senex", "Militi similis est.")
+HELPERS.add_quote("passer", "Passer", "Passer in cavea habitat.")
 
 modimport("items/hugTest.lua")
 

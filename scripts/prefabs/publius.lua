@@ -2,7 +2,7 @@ local brain = require("brains/publiusbrain")
 
 local assets = {
   Asset("ANIM", "anim/player_basic.zip"),
-  Asset("ANIM", "anim/player_jump.zip"),
+  Asset("ANIM", "anim/player_boat_jump.zip"),
   Asset("ANIM", "anim/wilson.zip")
 }
 

@@ -25,7 +25,7 @@ TUNING.BOAT = {RADIUS = 4}
 TILE_SCALE = 4
 EQUIPSLOTS = {HANDS = "hands"}
 FRAMES = 1/30
-WORLD_TILES = {GRASS = 1, CARPET = 2, SAVANNA = 3}
+WORLD_TILES = {GRASS = 1, CARPET = 2, SAVANNA = 3, FOREST = 4}
 TileGroupManager = {IsLandTile = function() return true end}
 
 local now, tasks, speeches, serial, cave, blocked, hole, obstacle, random_angles
@@ -100,6 +100,9 @@ local function Entity()
   end
   function inst:HasTag(tag) return self.tags[tag] == true end
   function inst:AddTag(tag) self.tags[tag] = true end
+  function inst:RemoveComponent(name) self.components[name] = nil end
+  function inst:SetPrefabName(name) self.prefab = name end
+  function inst:SetPrefabNameOverride(name) self.nameoverride = name end
   function inst:GetPosition() return Vector3(self.position:Get()) end
   function inst:GetCurrentPlatform() return self.platform end
   function inst:GetPhysicsRadius() return self.radius or 0 end
@@ -129,7 +132,8 @@ local function Entity()
   function inst.Transform:GetWorldPosition() return inst.position:Get() end
   function inst.Transform:SetPosition(x, y, z) inst.position = Vector3(x, y, z) end
   inst.Physics = {Teleport = function(_, x, y, z) inst.Transform:SetPosition(x, y, z) end}
-  inst.AnimState = {Hide = noop, Show = noop, OverrideSymbol = noop, PushAnimation = noop}
+  inst.AnimState = {Hide = noop, Show = noop, OverrideSymbol = noop, PushAnimation = noop,
+    AddOverrideBuild = function(self, build) self.overridebuild = build end}
   function inst.AnimState:SetBank(value) self.bank = value end
   function inst.AnimState:SetBuild(value) self.build = value end
   function inst.AnimState:PlayAnimation(value) self.animation = value end
@@ -245,6 +249,22 @@ function SpawnPrefab(name)
       end}
     elseif name == "steeringwheel" then
       inst.components.steeringwheel = {}
+    elseif name == "evergreen" then
+      inst:AddTag("tree")
+      inst.components.growable = {}
+      inst.components.plantregrowth = {}
+      inst.components.simplemagicgrower = {}
+      inst.components.burnable = {}
+      inst.components.propagator = {}
+      inst.components.timer = {StopTimer = function(self, timer) self[timer] = nil end}
+      inst.OnLoad = function(inst, data)
+        if data.burnt then
+          inst:AddTag("burnt")
+          inst.components.burnable, inst.components.propagator, inst.components.growable = nil, nil, nil
+          inst.components.timer.decay = true
+        end
+      end
+      inst.OnEntityWake = function(inst) inst.components.timer.decay = true end
     end
   end
   inst.prefab = name
@@ -268,7 +288,9 @@ package.loaded["prefabs/farm_plant_defs"] = {PLANT_DEFS = plant_defs}
 local HELPERS = require("helpers")
 local DIALOG = require("libellus")
 local Progress = require("components/libellusprogress")
-for _, name in ipairs({"casa", "lupa", "miles", "agricola", "agricola_crop", "agricola_farm", "navis", "senex"}) do
+Prefabs = {evergreen = {fn = function() return SpawnPrefab("evergreen") end}}
+for _, name in ipairs({"casa", "lupa", "miles", "agricola", "agricola_crop", "agricola_farm", "navis", "senex",
+  "passer", "passer_grove", "passer_burnt_tree"}) do
   factories[name] = require("prefabs/" .. name).fn
 end
 local count = 0
@@ -1092,8 +1114,11 @@ test("ship sighting says line one once and waits until near for lines two throug
     equal(speech.speaker, DIALOG.ch3[i].name == "Senex" and senex or player)
     if i > 1 then assert(speech.at >= speeches[i - 1].at + HELPERS.DIALOG_INTERVAL) end
   end
+  player.busy, senex.busy = false, false
   advance(25)
-  equal(#speeches, 8)
+  equal(#speeches, 10)
+  equal(speeches[9].content, DIALOG.ch3[9].content)
+  equal(speeches[10].content, DIALOG.ch3[10].content)
 end)
 
 test("ship conversation pauses out of range and retries refused Senex speech", function()
@@ -1222,15 +1247,240 @@ test("Senex brain follows the moving deck and recovers aboard instead of chasing
   equal(senex.position.z, 400)
 end)
 
+local function PasserEncounter()
+  local player, progress = Player()
+  progress:EnsurePublius()
+  function TheWorld.Map:GetTileAtPoint() return WORLD_TILES.FOREST end
+  local grove = SpawnPrefab("passer_grove")
+  grove.Transform:SetPosition(100, 0, 100)
+  grove._libellus_owneruserid = player.userid
+  grove._grove_dx, grove._grove_dz = 0, 1
+  progress._passer_grove = grove
+  advance(0)
+  return player, progress, grove, grove._passer
+end
+
+test("Passer uses native occupied-cage and bird visuals with eighty-one stable burnt trees behind", function()
+  local _, _, grove, passer = PasserEncounter()
+  equal(passer.AnimState.bank, "birdcage")
+  equal(passer.AnimState.build, "bird_cage")
+  equal(passer.AnimState.overridebuild, "robin_build")
+  equal(passer.AnimState.animation, "idle_bird")
+  equal(#grove._trees, 81)
+  local direct = factories.passer_burnt_tree()
+  equal(direct:GetSaveRecord().prefab, "passer_burnt_tree")
+  local center = HELPERS.GetPasserClearing(passer.position, 0, 1)
+  for _, tree in ipairs(grove._trees) do
+    equal(tree:HasTag("burnt"), true)
+    equal(tree.components.burnable, nil)
+    equal(tree.components.propagator, nil)
+    equal(tree.components.plantregrowth, nil)
+    equal(tree.components.timer.decay, nil)
+    assert(math.abs(tree.position.x-center.x) < 13.5 and math.abs(tree.position.z-center.z) < 13.5)
+    assert(tree.position.z > passer.position.z + HELPERS.PASSER_FIREBREAK)
+    tree:OnLoad({burnt = true})
+    equal(tree.components.timer.decay, nil)
+    tree:OnEntityWake()
+    equal(tree.components.timer.decay, nil)
+    equal(tree.burntcone, true)
+    equal(tree.prefab, "passer_burnt_tree")
+  end
+end)
+
+test("Passer clearing removes resources throughout the grove and firebreak and preserves its outside", function()
+  local grove = SpawnPrefab("passer_grove")
+  grove.Transform:SetPosition(100, 0, 100)
+  grove._grove_dx, grove._grove_dz = 0, 1
+  function TheWorld.Map:GetTileAtPoint() return WORLD_TILES.FOREST end
+  local center = HELPERS.GetPasserClearing(grove.position, 0, 1)
+  local inner, margin, outside = SpawnPrefab("grass"), SpawnPrefab("sapling"), SpawnPrefab("grass")
+  inner:AddTag("grass"); margin:AddTag("sapling"); outside:AddTag("grass")
+  inner.position = center
+  margin.position = center + Vector3(20, 0, 0)
+  outside.position = center + Vector3(30, 0, 0)
+  advance(0)
+  equal(inner:IsValid(), false)
+  equal(margin:IsValid(), false)
+  equal(outside:IsValid(), true)
+  equal(#grove._trees, 81)
+  for _, ent in ipairs(HELPERS.GetPasserClearingEntities(center)) do
+    equal(ent.prefab, "passer_burnt_tree")
+  end
+end)
+
+test("Passer placement rejects bases, story encounters, creatures, water, and holes before clearing", function()
+  local point = Vector3(100, 0, 100)
+  function TheWorld.Map:GetTileAtPoint() return WORLD_TILES.FOREST end
+  local center = HELPERS.GetPasserClearing(point, 0, 1)
+  local base = SpawnPrefab("treasurechest")
+  base:AddTag("structure")
+  base.position = center
+  equal(HELPERS.CanPreparePasserSite(point, 0, 1), false)
+  base:Remove()
+  local encounter = SpawnPrefab("agricola_farm")
+  encounter._libellus_owneruserid = "other"
+  encounter.position = center
+  equal(HELPERS.CanPreparePasserSite(point, 0, 1), false)
+  encounter:Remove()
+  local animal = SpawnPrefab("rabbit")
+  animal:AddComponent("health"):SetMaxHealth(20)
+  animal.position = center
+  equal(HELPERS.CanPreparePasserSite(point, 0, 1), false)
+  animal:Remove()
+  equal(HELPERS.CanPreparePasserSite(point, 0, 1), true)
+  local reserved = SpawnPrefab("passer_burnt_tree")
+  reserved.position = center
+  equal(HELPERS.CanPreparePasserSite(point, 0, 1), false)
+  reserved:Remove()
+  hole = true
+  equal(HELPERS.CanPreparePasserSite(point, 0, 1), false)
+  hole = false
+  function TheWorld.Map:IsPassableAtPoint() return false end
+  equal(HELPERS.CanPreparePasserSite(point, 0, 1), false)
+end)
+
+test("forest placement randomizes close to the original spawn and reuses owned groves", function()
+  local map = TheWorld.Map
+  function map:GetSize() return 20, 20 end
+  function map:GetTile() return WORLD_TILES.FOREST end
+  function map:GetTileAtPoint() return WORLD_TILES.FOREST end
+  function map:GetTileCenterPoint(x, z) return x * 4, 0, z * 4 end
+  local player, progress = Player()
+  local grove = progress:EnsurePasser()
+  assert(grove ~= nil)
+  assert(grove.position.x^2 + grove.position.z^2 <= 16^2)
+  equal(grove._libellus_owneruserid, player.userid)
+  local _, restored = Player()
+  restored:OnLoad(progress:OnSave())
+  equal(restored:EnsurePasser(), grove)
+  cave = true
+  local _, underground = Player()
+  equal(underground:EnsurePasser(), nil)
+end)
+
+test("reflection starts fifteen seconds after line eight finishes and then speaks nine and ten in order", function()
+  local player, progress, _, ship = ShipEncounter()
+  progress:SetProgress("ch3", 8)
+  player.position = ship.position
+  progress:DialogLoop(player)
+  equal(speeches[1].content, DIALOG.ch3[8].content)
+  advance(19.99)
+  equal(#speeches, 1)
+  advance(.01)
+  equal(speeches[2].content, DIALOG.ch3[9].content)
+  equal(speeches[2].at, speeches[1].at + HELPERS.DIALOG_INTERVAL + 15)
+  advance(5)
+  equal(speeches[3].content, DIALOG.ch3[10].content)
+  equal(speeches[3].speaker, progress._publius)
+  equal(progress.dialog, 11)
+end)
+
+test("the reflection delay survives save and load with its remaining duration", function()
+  local player, progress, _, ship = ShipEncounter()
+  progress:SetProgress("ch3", 8)
+  player.position = ship.position
+  progress:DialogLoop(player)
+  advance(8)
+  local saved = progress:OnSave()
+  equal(saved.ch3_reflection_remaining, 12)
+  -- Pause the original player's scheduled tasks as on disconnect.
+  player.valid = false
+  local arriving, restored = Player()
+  restored:OnLoad(saved)
+  restored:DialogLoop(arriving)
+  advance(11.99)
+  equal(#speeches, 1)
+  advance(.01)
+  equal(speeches[2].content, DIALOG.ch3[9].content)
+end)
+
+test("Passer repeats line eleven on sight independently of progress and waits when invisible", function()
+  local player, progress, _, passer = PasserEncounter()
+  progress:SetProgress("ch2", 3)
+  player.position = passer.position + Vector3(10, 0, 0)
+  passer.visible = false
+  progress:DialogLoop(player)
+  advance(4)
+  equal(#speeches, 0)
+  passer.visible = true
+  advance(2)
+  equal(speeches[1].content, DIALOG.ch3[11].content)
+  equal(speeches[1].speaker, passer)
+  advance(31)
+  equal(#speeches, 2)
+  equal(speeches[2].content, DIALOG.ch3[11].content)
+  equal(progress.chapter, "ch2")
+  equal(progress.dialog, 3)
+end)
+
+test("nearby Passer plays twelve through fourteen and advances only after the final speech", function()
+  local player, progress, _, passer = PasserEncounter()
+  progress:SetProgress("ch3", 11)
+  player.position = passer.position + Vector3(5, 0, 0)
+  progress:DialogLoop(player)
+  advance(6)
+  equal(speeches[1].content, DIALOG.ch3[11].content)
+  equal(speeches[2].content, DIALOG.ch3[12].content)
+  advance(10)
+  equal(speeches[3].content, DIALOG.ch3[13].content)
+  equal(speeches[4].content, DIALOG.ch3[14].content)
+  equal(progress.chapter, "ch3")
+  equal(progress.dialog, 14)
+  advance(4.99)
+  equal(progress.chapter, "ch3")
+  advance(.01)
+  equal(progress.chapter, "ch4")
+  equal(progress.dialog, 1)
+end)
+
+test("Passer conversation pauses outside range and a newer event cancels completion", function()
+  local player, progress, _, passer = PasserEncounter()
+  progress:SetProgress("ch3", 12)
+  player.position = passer.position + Vector3(5.01, 0, 0)
+  progress:DialogLoop(player)
+  advance(6)
+  equal(progress.dialog, 12)
+  player.position = passer.position
+  advance(2)
+  equal(progress.dialog, 13)
+  advance(10)
+  equal(progress.dialog, 14)
+  progress:SetProgress("ch3", 1)
+  advance(5)
+  equal(progress.chapter, "ch3")
+  equal(progress.dialog, 1)
+end)
+
+test("grove reload restores cage and trees without clearing or duplicating them", function()
+  local _, _, grove = PasserEncounter()
+  local data, ents = {}, {}
+  local refs = grove:OnSave(data)
+  equal(#refs, 82)
+  for _, ent in pairs(Ents) do ents[ent.GUID] = {entity = ent} end
+  local loaded = SpawnPrefab("passer_grove")
+  loaded:OnLoad(data)
+  loaded:OnLoadPostPass(ents, data)
+  local before = serial
+  advance(0)
+  equal(serial, before)
+  equal(loaded._passer, grove._passer)
+  equal(#loaded._trees, 81)
+  equal(loaded._grove_dx, 0)
+  equal(loaded._grove_dz, 1)
+end)
+
 test("client encounter prefabs have visuals and no server-only components", function()
   TheWorld.ismastersim = false
-  for _, name in ipairs({"casa", "lupa", "miles", "agricola", "agricola_crop", "agricola_farm", "navis", "senex"}) do
+  for _, name in ipairs({"casa", "lupa", "miles", "agricola", "agricola_crop", "agricola_farm", "navis", "senex",
+    "passer", "passer_grove"}) do
     local inst = SpawnPrefab(name)
     assert(inst.pristine)
     equal(inst.components.combat, nil)
     equal(inst.components.health, nil)
     equal(inst.components.inventory, nil)
-    if name == "miles" or name == "agricola" or name == "senex" then assert(inst.components.talker ~= nil) end
+    if name == "miles" or name == "agricola" or name == "senex" or name == "passer" then
+      assert(inst.components.talker ~= nil)
+    end
   end
 end)
 
