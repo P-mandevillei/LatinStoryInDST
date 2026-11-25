@@ -1,52 +1,79 @@
 local DIALOG = {
   ch1 = {
-    "Octavia: Me vocant Octaviam.",
-    "Octavia: Puella sum.",
-    "Octavia: Poetam amo.",
-    "Octavia: Lupam meam bene curo.",
+    {name="Octavia", content="Me vocant Octaviam."},
+    {name="Octavia", content="Puella sum"},
+    {name="Octavia", content="Poetam pulchrum amo."},
+    {name="Octavia", content="Lupam meam bene curo."},
 
-    "Octavia: Poetam in agro video.",
+    {name="Octavia", content="Poetam in agro video."},
 
-    "Octavia: Salve, poeta! Quomodo te vocant?",
-    "Publius: Me vocant Publium.",
-    "Octavia: Papae! Filium lupa mea habet. Publilium eum voco. Videre debes.",
-    "Publius: Ubi habitat Publilius?",
-    "Octavia: Lupa et Publilius in casā habitant. Mecum veni!",
-  }
+    {name="Octavia", content="Salve, poeta! Quomodo te vocant?", facing="Publius"},
+    {name="Publius", content="Me vocant Publium.", facing="Octavia"},
+    {name="Octavia", content="Papae! Filium lupa mea habet. Publilium eum voco. Videre debes.", facing="Publius"},
+    {name="Publius", content="Fabulam narras! Audio lupam magnam esse. Ubi habitat Publilius?", facing="Octavia"},
+    {name="Octavia", content="Lupa et Publilius in casā gaudio habitant. Mecum veni!", facing="Publius"},
+  },
+  ch2 = {
+    {name="Publius", content="Publilium autem non video!"},
+    {name="Octavia", content="Lupa vincta est! Viri armati sunt!"},
+
+    {name="Milites", content="E casā ambulate! Rex magnam lupam vult.", facing="Octavia"},
+    {name="Octavia", content="Viros timeo. Fugere debemus!", facing="Publius"},
+    {name="Publius", content="Lupam servare possumus. Auxilium in viā exspecto.", facing="Octavia"},
+
+    {name="Agricola", content="Quomodo valetis?", facing="Octavia"},
+    {name="Octavia", content="Lupa mea a rege tenetur. Filium lupae non video.", facing="Agricola"},
+    {name="Agricola", content="Propter bellum, rex animos magnos vult.", facing="Octavia"},
+    {name="Agricola", content="Rex dicitur numquam vinci posse.", facing="Octavia"},
+    {name="Agricola", content="Si auxilium lupae dare cupitis, animum magnum parari debet.", facing="Octavia"},
+    {name="Octavia", content="Ubi est rex?", facing="Agricola"},
+    {name="Agricola", content="Rex in aquā longe a terrā habitat.", facing="Octavia"},
+  },
+
 }
 
-for ch, contents in pairs(DIALOG) do
-  for idx, sent in ipairs(contents) do
-    local name = sent:match("^([^:]*):")
-    local striped = sent:gsub("^[^:]*:", "")
-    striped = striped:match("^%s*(.-)%s*$")
-    contents[idx] = {name = name, content = striped}
-  end
-end
-
-DIALOG.CH1_SEP = {4, 5, 10}
-
+DIALOG.CH1_SEP = {4, 5, #DIALOG.ch1}
+DIALOG.CH2_SEP = {2, 5, #DIALOG.ch2}
 
 -- debug only
 local function printTable(tbl, indent)
-    indent = indent or 0
-    local prefix = string.rep("  ", indent)
+  indent = indent or 0
+  local prefix = string.rep("  ", indent)
 
-    if type(tbl) ~= "table" then
-        print(prefix .. tostring(tbl))
-        return
-    end
+  if type(tbl) ~= "table" then
+    print(prefix .. tostring(tbl))
+    return
+  end
 
-    for k, v in pairs(tbl) do
-        if type(v) == "table" then
-            print(prefix .. tostring(k) .. ":")
-            printTable(v, indent + 1)
-        else
-            print(prefix .. tostring(k) .. " = " .. tostring(v))
-        end
+  for k, v in pairs(tbl) do
+    if type(v) == "table" then
+      print(prefix .. tostring(k) .. ":")
+      printTable(v, indent + 1)
+    else
+      print(prefix .. tostring(k) .. " = " .. tostring(v))
     end
+  end
 end
+-- local function split(inputstr, sep)
+--   printTable(inputstr, 4)
+--   if sep == nil then
+--     sep = "%s" -- defaults to whitespace
+--   end
+--   local t = {}
+--   for str in string.gmatch(inputstr, "([^" .. sep .. "]+)") do
+--     table.insert(t, str)
+--   end
+--   return t
+-- end
+-- for ch, str in pairs(DIALOG) do
+--   local contents = split(str, "\n")
+--   for idx, sent in ipairs(contents) do
+--     local name = sent:match("^([^:]*):")
+--     local striped = sent:gsub("^[^:]*:", "")
+--     striped = striped:match("^%s*(.-)%s*$")
+--     contents[idx] = {name = name, content = striped}
+--   end
+-- end
 -- printTable(DIALOG)
-
 
 return DIALOG
