@@ -25,7 +25,11 @@ PrefabFiles = {
   "passer_free",
   "passer_grove",
   "passer_burnt_tree",
-  "rex_voice"
+  "rex_voice",
+  "king_castle",
+  "rex",
+  "king_court",
+  "king_scene_light"
 }
 
 -- name prefabs
@@ -38,11 +42,18 @@ HELPERS.add_quote("agricola", "Agricola", "Agricola bonus est.")
 HELPERS.add_quote("senex", "Senex", "Militi similis est.")
 HELPERS.add_quote("passer", "Passer", "Passer calidus est.")
 HELPERS.add_quote("passer_free", "Passer", "Passer a me liberatur!")
+HELPERS.add_quote("king_castle", "Regia", "Rex hic habitat.")
+HELPERS.add_quote("rex", "Rex", "Rex crudelis est.")
+HELPERS.add_quote("king_lupa", "Lupa", "Lupam liberare debemus.")
+for _, prefab in ipairs({"animus_dragonfly", "animus_deerclops", "animus_bearger", "animus_beequeen"}) do
+  HELPERS.add_quote(prefab, "Animus Magnus", "Animum magnum video.")
+end
 
 AddPrefabPostInit("pigking", require("rexanimalium").Setup)
 local storyitems = require("storyitems")
 AddPrefabPostInit("panflute", storyitems.SetupPanFlute)
 AddPrefabPostInit("bell", storyitems.SetupNamed)
+AddPrefabPostInit("bigfoot", require("kingscene").SetupFoot)
 
 modimport("items/hugTest.lua")
 

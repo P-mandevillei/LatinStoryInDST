@@ -47,6 +47,79 @@ HELPERS.PASSER_GROVE_OFFSET = HELPERS.PASSER_GROVE_SIZE / 2 + HELPERS.PASSER_FIR
 HELPERS.PASSER_FLIGHT_SPEED = 7
 HELPERS.PASSER_FLIGHT_HEIGHT = 2
 HELPERS.REX_MEETING_DISTANCE = 7
+HELPERS.CASTLE_SIZE = 18
+HELPERS.CASTLE_CARPET_SIZE = 20
+HELPERS.CASTLE_SEE_DISTANCE = 30
+HELPERS.KING_SEE_DISTANCE = 22
+HELPERS.CASTLE_SPAWN_RETRY_INTERVAL = 60
+HELPERS.KING_HEALTH = 1000
+HELPERS.KING_COURT_HEALTH = 2000
+
+-- Use the topology, not just meteor turf (which also exists on the mainland).
+function HELPERS.IsLunarPoint(x, z)
+  local world = GLOBAL.TheWorld
+  local index = world.Map:GetNodeIdAtPoint(x, 0, z)
+  local topology = world.topology
+  local node = topology ~= nil and topology.nodes[index] or nil
+  local id = topology ~= nil and topology.ids[index] or ""
+  if id:find("MoonIsland", 1, true) ~= nil then return true end
+  for _, tag in ipairs(node ~= nil and node.tags or {}) do
+    if tag == "lunacyarea" then return true end
+  end
+  return false
+end
+
+function HELPERS.GetCastleSiteEntities(point)
+  local result = {}
+  for _, ent in ipairs(GLOBAL.TheSim:FindEntities(point.x, 0, point.z, 16,
+    nil, {"FX", "DECOR", "INLIMBO", "NOCLICK"})) do
+    local x, _, z = ent.Transform:GetWorldPosition()
+    if math.abs(x-point.x) <= 11 and math.abs(z-point.z) <= 11 then
+      table.insert(result, ent)
+    end
+  end
+  return result
+end
+
+function HELPERS.CanPrepareCastleSite(point)
+  local map = GLOBAL.TheWorld.Map
+  for dx = -10, 10, 1 do
+    for dz = -10, 10, 1 do
+      local sample = GLOBAL.Vector3(point.x+dx, 0, point.z+dz)
+      if not HELPERS.IsLunarPoint(sample.x, sample.z)
+        or not map:IsPassableAtPoint(sample.x, 0, sample.z)
+        or map:IsPointNearHole(sample) then return false end
+    end
+  end
+  for _, ent in ipairs(HELPERS.GetCastleSiteEntities(point)) do
+    -- Clear only ordinary natural clutter. Protect altars, players, bases,
+    -- creatures, and every other story encounter.
+    if not HELPERS.CanClearForPasser(ent) then return false end
+  end
+  return true
+end
+
+function HELPERS.FindCastleSpawnPoint()
+  local map = GLOBAL.TheWorld.Map
+  local width, height = map:GetSize()
+  local candidates = {}
+  for x = 0, width-1 do
+    for z = 0, height-1 do
+      local px, _, pz = map:GetTileCenterPoint(x, z)
+      if HELPERS.IsLunarPoint(px, pz) and map:IsPassableAtPoint(px, 0, pz) then
+        -- Five native four-unit tiles make an exact 20-unit carpet square.
+        table.insert(candidates, GLOBAL.Vector3(px, 0, pz))
+      end
+    end
+  end
+  while #candidates > 0 do
+    local i = math.random(#candidates)
+    local point = candidates[i]
+    candidates[i] = candidates[#candidates]
+    candidates[#candidates] = nil
+    if HELPERS.CanPrepareCastleSite(point) then return point end
+  end
+end
 
 function HELPERS.CanClearForPasser(ent)
   if ent:HasTag("structure") or ent:HasTag("character") or ent:HasTag("player")

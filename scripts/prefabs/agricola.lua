@@ -1,6 +1,7 @@
 local brain = require("brains/agricolabrain")
 local assets = {
   Asset("ANIM", "anim/player_basic.zip"),
+  Asset("ANIM", "anim/player_knockedout.zip"),
   Asset("ANIM", "anim/woodie.zip"),
   Asset("ANIM", "anim/hat_straw.zip")
 }

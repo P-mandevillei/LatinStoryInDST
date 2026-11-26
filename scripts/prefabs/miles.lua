@@ -3,6 +3,7 @@ local HELPERS = require("helpers")
 
 local assets = {
   Asset("ANIM", "anim/player_basic.zip"),
+  Asset("ANIM", "anim/player_knockedout.zip"),
   Asset("ANIM", "anim/player_actions.zip"),
   Asset("ANIM", "anim/player_attacks.zip"),
   Asset("ANIM", "anim/wx78.zip")

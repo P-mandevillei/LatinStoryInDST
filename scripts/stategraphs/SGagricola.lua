@@ -32,6 +32,7 @@ local states = {
     ontimeout = function(inst) FinishWork(inst, false) end,
   },
 }
+require("stategraphs/libellussleepstates")(states)
 CommonStates.AddIdle(states)
 CommonStates.AddWalkStates(states)
 return StateGraph("agricola", states, {CommonHandlers.OnLocomote(false, true)}, "idle")

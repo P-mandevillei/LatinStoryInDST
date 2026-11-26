@@ -1,6 +1,7 @@
 require("stategraphs/commonstates")
 
 local states = {}
+require("stategraphs/libellussleepstates")(states)
 CommonStates.AddIdle(states)
 CommonStates.AddWalkStates(states)
 CommonStates.AddRunStates(states)

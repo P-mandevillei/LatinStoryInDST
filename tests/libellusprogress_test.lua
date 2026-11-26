@@ -125,6 +125,7 @@ function Progress:EnsureCasa() end
 function Progress:EnsureFarm() end
 function Progress:EnsureNavis() end
 function Progress:EnsurePasser() end
+function Progress:EnsureCastle() end
 local tests = 0
 local function test(name, fn)
   if test_filter ~= nil and not name:find(test_filter, 1, true) then return end
@@ -469,6 +470,8 @@ test("Publius loads human boat-hop animations and configures every hop phase", f
   CommonHandlers = {OnLocomote = function() return {} end, OnHop = function() return {} end}
   package.loaded["stategraphs/commonstates"] = true
   FRAMES = 1/30
+  function State(data) return data end
+  function EventHandler(event, fn) return {event = event, fn = fn} end
   function StateGraph(name, states, events) return {states = states, events = events} end
   dofile("scripts/stategraphs/SGpublius.lua")
   equal(hop.wait, true)

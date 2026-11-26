@@ -87,6 +87,30 @@ local DIALOG = {
     {name="Senex", content="Discedite! A vos non vincar."},
 
     {name="Octavia", content="Iace!"},
+  },
+  ch6 = {
+    {name="Octavia", content="Lupa video! Consilium nostrum ei narrare cupio. Sed timeo milites id audire!"},
+    {name="Publius", content="Cogitare de verbis passeris debes. Animus bonus tibi est. Senti!"},
+    
+    {name="Lupa", content="Optime! Aminum meum iam sentivisti."},
+    {name="Octavia", content="Auxilia multorum habuimus. Te liberabimus dolo."},
+    {name="Octavia", content="Cum saxum sacrum regi dederimus, belua crudelis veniet."},
+    {name="Octavia", content="Currere debebis!"},
+    
+    {name="Octavia", content="Ecce! Animum magnum habeo!"},
+    {name="Rex", content="Qui estis? Discedite iussu regis!"},
+    {name="Octavia", content="Saxum sacrum cepimus a speluncā deae, quam per omnes terras quaesiveramus."},
+    {name="Octavia", content="Animum magnum et praeclarum id vocat."},
+    {name="Rex", content="Bene. Mihi da!"},
+
+    {name="Rex", content="Sentio terram permoveri. Res inusitata venit."},
+
+    {name="Lupa", content="Bene! Publilium regi animalium dederam. Eum quaerere debemus."},
+
+    {name="Rex animalium", content="Lupam liberavistis! Terras nostras servavistis!"},
+    {name="Animalia", content="Lupam liberavistis! Terras nostras servavistis!"},
+    {name="Publilius", content="Me servavistis! Felix sum!"},
+    {name="Omnes", content="Felix sum!"},
   }
 }
 
@@ -95,6 +119,7 @@ DIALOG.CH2_SEP = {2, 5, 6, 13, #DIALOG.ch2}
 DIALOG.CH3_SEP = {1, 8, 10, 11, #DIALOG.ch3}
 DIALOG.CH4_SEP = {8, #DIALOG.ch4}
 DIALOG.CH5_SEP = {11, 16, #DIALOG.ch5}
+DIALOG.CH6_SEP = {2, 6, 11, 12, 13, #DIALOG.ch6}
 
 -- debug only
 local function printTable(tbl, indent)

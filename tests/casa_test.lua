@@ -520,6 +520,14 @@ local function Encounter()
   return player, progress, casa
 end
 
+-- Shared deterministic world for the lunar castle integration suite.
+if LIBELLUS_TEST_HARNESS then
+  return {reset = reset, advance = advance, Entity = Entity, Player = Player,
+    factories = factories, equal = equal,
+    speeches = function() return speeches end,
+    settime = function(value) now = value end}
+end
+
 test("spawn uses original player origin and retries blocked footprints", function()
   local player, progress = Player()
   blocked = true

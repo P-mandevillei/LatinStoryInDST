@@ -22,6 +22,11 @@ function LibellusProgress:SetProgress(chapter, dialog, expected_revision)
 
   self.chapter = chapter
   self.dialog = dialog
+  self._ch6_pending = nil
+  self._ch6_trade_ready = chapter == "ch6" and dialog == DIALOG.CH6_SEP[4] or nil
+  if self._castle ~= nil and self._castle:IsValid()
+    and (chapter ~= "ch6" or dialog <= DIALOG.CH6_SEP[1]
+      or dialog > DIALOG.CH6_SEP[2] + 1) then self._castle:EndNight(self.inst) end
   if chapter ~= "ch3" or dialog ~= DIALOG.CH3_SEP[2] + 1 then self._ch3_reflection_time = nil end
   self._progress_revision = self._progress_revision + 1
   if self.inst._libellus_chapter ~= nil then
@@ -39,6 +44,11 @@ function LibellusProgress:OnSave()
     casa_cleared = self._casa_cleared,
     rex_panflute_received = self._rex_panflute_received,
     rex_bell_received = self._rex_bell_received,
+    ch6_trade_ready = self._ch6_trade_ready,
+    ch6_pending = self._ch6_pending ~= nil and {
+      line = self._ch6_pending.line,
+      remaining = math.max(0, self._ch6_pending.untiltime - GetTime()),
+    } or nil,
     passer_to_rex_remaining = self._passer_to_rex_time ~= nil
       and math.max(0, self._passer_to_rex_time - GetTime()) or nil,
     ch3_reflection_remaining = self._ch3_reflection_time ~= nil
@@ -61,6 +71,11 @@ function LibellusProgress:OnLoad(data)
     self:SetProgress(data.chapter, data.dialog)
     self._casa_cleared = data.casa_cleared
     self._rex_panflute_received, self._rex_bell_received = data.rex_panflute_received, data.rex_bell_received
+    if data.ch6_trade_ready ~= nil then self._ch6_trade_ready = data.ch6_trade_ready end
+    if data.ch6_pending ~= nil then
+      self._ch6_pending = {line = data.ch6_pending.line,
+        untiltime = GetTime()+math.max(0, data.ch6_pending.remaining), revision = self._progress_revision}
+    end
     if data.passer_to_rex_remaining ~= nil then
       self._passer_to_rex_time = GetTime() + math.max(0, data.passer_to_rex_remaining)
     end
@@ -86,6 +101,7 @@ function LibellusProgress:OnLoad(data)
 end
 
 function LibellusProgress:OnRemoveEntity()
+  if self._castle ~= nil and self._castle:IsValid() then self._castle:EndNight(self.inst) end
   local publius = self._publius
   if publius ~= nil and publius:IsValid() and publius.persists == false then
     publius:Remove()
@@ -234,6 +250,23 @@ function LibellusProgress:GetPasser()
   return passer ~= nil and passer:IsValid() and passer or nil
 end
 
+-- There is one human king per surface world. All players share the castle;
+-- each player's sight triggers and right to offer a gift remain independent.
+function LibellusProgress:EnsureCastle()
+  if TheWorld:HasTag("cave") then return end
+  if self._castle ~= nil and self._castle:IsValid() then return self._castle end
+  for _, ent in pairs(Ents) do
+    if ent.prefab == "king_castle" and ent:IsValid() then self._castle = ent; return ent end
+  end
+  if TheWorld._libellus_castle_retry ~= nil and GetTime() < TheWorld._libellus_castle_retry then return end
+  TheWorld._libellus_castle_retry = GetTime()+HELPERS.CASTLE_SPAWN_RETRY_INTERVAL
+  local point = HELPERS.FindCastleSpawnPoint()
+  if point == nil then return end
+  local castle = SpawnPrefab("king_castle")
+  if castle ~= nil then castle.Transform:SetPosition(point:Get()); self._castle = castle end
+  return castle
+end
+
 function LibellusProgress:OnPasserFreed(grove)
   if self._passer_grove ~= grove and (grove._libellus_owneruserid == nil
     or grove._libellus_owneruserid ~= self.inst.userid) then return end
@@ -335,6 +368,7 @@ function LibellusProgress:DialogLoop(inst)
     self:EnsureCasa()
     self:EnsureFarm()
     self:EnsureNavis()
+    self:EnsureCastle()
     local grove = self:EnsurePasser()
     if grove ~= nil and grove._released then self:OnPasserFreed(grove) end
     if self._casa_cleared and self._casa ~= nil and self._casa:IsValid() then
@@ -360,6 +394,11 @@ function LibellusProgress:DialogLoop(inst)
   end
 
   local chapter, dialog = self:GetProgress()
+  if self:UpdateChapterSixScene() then
+    self:ScheduleDialogLoop(HELPERS.CHECK_PROGRESS_INTERVAL)
+    return
+  end
+  chapter, dialog = self:GetProgress()
   if chapter == "ch5" then self:PrepareChapterFiveSenex(inst) end
   if chapter == "ch4" and dialog > DIALOG.CH4_SEP[1]
     and (self._passer_to_rex_time == nil or GetTime() >= self._passer_to_rex_time) then
@@ -371,7 +410,7 @@ function LibellusProgress:DialogLoop(inst)
   if (self._entry_speech_until ~= nil and GetTime() < self._entry_speech_until)
     or (self._flute_speech_until ~= nil and GetTime() < self._flute_speech_until)
     or inst.loadingprotection or inst:HasTag("playerghost") or inst.components.talker == nil
-    or (not ship_dialog and (IsBusy(inst) or (publius ~= nil and IsBusy(publius)))) then
+    or (not ship_dialog and chapter ~= "ch6" and (IsBusy(inst) or (publius ~= nil and IsBusy(publius)))) then
     self:ScheduleDialogLoop(HELPERS.BUSY_INTERVAL)
     return
   end
@@ -399,9 +438,100 @@ function LibellusProgress:DialogLoop(inst)
   elseif chapter == "ch5" then
     if dialog <= DIALOG.CH5_SEP[1] then say_func = self.SayChapterFiveGifts
     elseif dialog <= DIALOG.CH5_SEP[2] then say_func = self.SayChapterFiveSenex end
+  elseif chapter == "ch6" and dialog <= DIALOG.CH6_SEP[5] then
+    say_func = self.SayChapterSix
   end
   local delay = say_func(self, inst, chapter, dialog, revision)
   self:ScheduleDialogLoop(delay)
+end
+
+function LibellusProgress:SetChapterSixPending(line)
+  self._ch6_pending = {line = line, untiltime = GetTime()+HELPERS.DIALOG_INTERVAL,
+    revision = self._progress_revision}
+end
+
+function LibellusProgress:UpdateChapterSixScene()
+  local castle = self._castle
+  if castle == nil or not castle:IsValid() then return false end
+  if self.inst.loadingprotection or self.inst:HasTag("playerghost") then
+    castle:EndNight(self.inst)
+    return true
+  end
+  local pending = self._ch6_pending
+  if pending ~= nil and pending.revision ~= self._progress_revision then self._ch6_pending = nil; pending = nil end
+  if pending ~= nil then
+    if GetTime() < pending.untiltime then return true end
+    self._ch6_pending = nil
+    if pending.line == DIALOG.CH6_SEP[1] and self.chapter == "ch6"
+      and self.dialog == DIALOG.CH6_SEP[1] + 1 then
+      castle:BeginNight(self.inst)
+    elseif pending.line == DIALOG.CH6_SEP[2] then
+      castle:EndNight(self.inst)
+    elseif pending.line == DIALOG.CH6_SEP[3] and self.chapter == "ch6"
+      and self.dialog == DIALOG.CH6_SEP[4] then
+      self._ch6_trade_ready = true
+    elseif pending.line == DIALOG.CH6_SEP[5] and self.chapter == "ch6"
+      and self.dialog == DIALOG.CH6_SEP[5] then
+      self:SetProgress("ch6", DIALOG.CH6_SEP[5] + 1)
+    end
+  end
+  if self.chapter == "ch6" and self.dialog > DIALOG.CH6_SEP[1] and self.dialog <= DIALOG.CH6_SEP[2] then
+    if not castle:BeginNight(self.inst) then return true end
+  elseif self.chapter ~= "ch6" or self.dialog <= DIALOG.CH6_SEP[1] or self.dialog > DIALOG.CH6_SEP[2] then
+    castle:EndNight(self.inst)
+  end
+  return false
+end
+
+function LibellusProgress:IsKingTradeReady(castle)
+  return self._castle == castle and self.chapter == "ch6" and self.dialog == DIALOG.CH6_SEP[4]
+    and self._ch6_trade_ready == true and self._ch6_pending == nil
+end
+
+function LibellusProgress:OnKingBellReceived(castle)
+  if not self:IsKingTradeReady(castle) then return end
+  self:SetProgress("ch6", DIALOG.CH6_SEP[5])
+  castle._king.components.talker:Say(DIALOG.ch6[DIALOG.CH6_SEP[4]].content, HELPERS.DIALOG_INTERVAL)
+  self:SetChapterSixPending(DIALOG.CH6_SEP[4])
+  self:ScheduleDialogLoop(HELPERS.CHECK_PROGRESS_INTERVAL)
+end
+
+function LibellusProgress:OnHumanKingDeath(castle)
+  if self._castle == castle and self.chapter == "ch6" and self.dialog == DIALOG.CH6_SEP[5] then
+    self:ScheduleDialogLoop(HELPERS.CHECK_PROGRESS_INTERVAL)
+  end
+end
+
+function LibellusProgress:SayChapterSix(inst, chapter, dialog, revision)
+  local castle = self._castle
+  if castle == nil or not castle:IsValid() then return HELPERS.CHECK_PROGRESS_INTERVAL end
+  local king, lupa = castle._king, castle._lupa
+  local target = dialog <= DIALOG.CH6_SEP[1] and castle or (dialog <= DIALOG.CH6_SEP[2] and lupa or king)
+  if dialog == DIALOG.CH6_SEP[4] then return HELPERS.CHECK_PROGRESS_INTERVAL end -- Gift event only.
+  if dialog == DIALOG.CH6_SEP[5] then
+    if not castle._betrayed or not castle._king_dead or castle._betrayeruserid ~= inst.userid then
+      return HELPERS.CHECK_PROGRESS_INTERVAL
+    end
+  elseif dialog == 1 or dialog == DIALOG.CH6_SEP[1] + 1 or dialog == DIALOG.CH6_SEP[2] + 1 then
+    if target == nil or not target:IsValid()
+      or not inst:IsNear(target, dialog == 1 and HELPERS.CASTLE_SEE_DISTANCE or HELPERS.KING_SEE_DISTANCE)
+      or not CanEntitySeeTarget(inst, target) then return HELPERS.CHECK_PROGRESS_INTERVAL end
+  end
+  local line = DIALOG.ch6[dialog]
+  local actors = {Octavia = inst, Publius = self._publius, Lupa = lupa, Rex = king}
+  local speaker = actors[line.name]
+  if speaker == nil or not speaker:IsValid() or speaker.components.talker == nil
+    or speaker.components.talker:IsTalking() then return HELPERS.BUSY_INTERVAL end
+  if target ~= nil and target:IsValid() and speaker ~= target then
+    speaker:FacePoint(target.Transform:GetWorldPosition())
+  end
+  return self:Say(speaker, chapter, dialog, revision, line.content,
+    function(d) return chapter, d == DIALOG.CH6_SEP[5] and d or d+1 end,
+    function()
+      if dialog == DIALOG.CH6_SEP[1] or dialog == DIALOG.CH6_SEP[2]
+        or dialog == DIALOG.CH6_SEP[3] or dialog == DIALOG.CH6_SEP[5] then self:SetChapterSixPending(dialog) end
+      return HELPERS.DIALOG_INTERVAL
+    end)
 end
 
 function LibellusProgress:Say(

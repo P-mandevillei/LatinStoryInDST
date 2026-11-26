@@ -122,12 +122,13 @@ end
 
 test("chapter and line choices come from actual dialogue and exclude metadata", function()
   local chapters = Selection.GetChapterOptions()
-  equal(#chapters, 5)
+  equal(#chapters, 6)
   equal(chapters[1].data, "ch1")
   equal(chapters[2].data, "ch2")
   equal(chapters[3].data, "ch3")
   equal(chapters[4].data, "ch4")
   equal(chapters[5].data, "ch5")
+  equal(chapters[6].data, "ch6")
   for _, chapter in ipairs(chapters) do
     local lines = Selection.GetLineOptions(chapter.data)
     equal(#lines, #DIALOG[chapter.data])
