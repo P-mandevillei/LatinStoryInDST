@@ -157,12 +157,30 @@ local function ReceiveBell(inst, player, bell)
   inst._betrayed, inst._betrayeruserid = true, player.userid
   EndNight(inst)
   if Alive(inst._lupa) then inst._lupa.components.kingguard:Escape(FindEscape(inst)) end
+  inst._court_rallying, inst._court_hold_until = true, nil
   for _, guard in ipairs(inst._guards) do
-    if Alive(guard) then guard.components.kingguard:AttackPlayer(player.userid) end
+    if Alive(guard) then guard.components.kingguard:GatherForBell(player.userid) end
   end
   player.components.libellusprogress:OnKingBellReceived(inst)
   Summon(inst, bell)
   return true
+end
+local function CheckCourt(inst)
+  if not inst._court_rallying then return end
+  for _, guard in ipairs(inst._guards) do
+    if Alive(guard) and not guard.components.kingguard:IsAtGatherPoint() then
+      inst._court_hold_until = nil
+      return
+    end
+  end
+  -- The whole surviving court must arrive and remain beside Rex for the
+  -- full pause; travel time never counts toward the four-second wait.
+  inst._court_hold_until = inst._court_hold_until or GetTime()+HELPERS.KING_COURT_HOLD_TIME
+  if GetTime() < inst._court_hold_until then return end
+  inst._court_rallying, inst._court_hold_until = nil, nil
+  for _, guard in ipairs(inst._guards) do
+    if Alive(guard) then guard.components.kingguard:AttackPlayer(inst._betrayeruserid) end
+  end
 end
 local function OnKingDeath(inst)
   inst._king_dead = true
@@ -193,6 +211,9 @@ end
 local function OnSave(inst, data)
   data.populated, data.betrayed, data.king_dead = inst._populated, inst._betrayed, inst._king_dead
   data.betrayeruserid = inst._betrayeruserid
+  data.court_rallying = inst._court_rallying
+  data.court_hold_remaining = inst._court_hold_until ~= nil
+    and math.max(0, inst._court_hold_until-GetTime()) or nil
   data.night_clock = inst._night_clock
   local refs = {}
   for _, field in ipairs({"_king", "_lupa"}) do
@@ -254,6 +275,10 @@ local function fn()
     if data == nil then return end
     inst._populated, inst._betrayed, inst._king_dead = data.populated, data.betrayed, data.king_dead
     inst._betrayeruserid = data.betrayeruserid
+    inst._court_rallying = data.court_rallying
+    if data.court_hold_remaining ~= nil then
+      inst._court_hold_until = GetTime()+math.max(0, data.court_hold_remaining)
+    end
     -- Clock and per-entity sleep leases restore before a resumed conversation
     -- takes a new snapshot. No save can leave a world permanently at night.
     if data.night_clock ~= nil then
@@ -263,6 +288,7 @@ local function fn()
   inst:ListenForEvent("onremove", function() EndNight(inst); Scene.FinishFootLanding(inst) end)
   inst:DoTaskInTime(0, Populate)
   inst:DoPeriodicTask(.5, CheckNight)
+  inst:DoPeriodicTask(HELPERS.KING_COURT_CHECK_INTERVAL, CheckCourt)
   return inst
 end
 return Prefab("king_castle", fn, nil, prefabs)

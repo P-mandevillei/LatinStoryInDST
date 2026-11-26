@@ -1,4 +1,5 @@
 local CourtBrain = require("brains/kingcourtbrain")
+local HELPERS = require("helpers")
 local KingGuard = Class(function(self, inst)
   self.inst = inst
   self.offset = {x = 0, z = 0}
@@ -36,13 +37,35 @@ function KingGuard:FindTarget()
 end
 function KingGuard:GetDestination()
   if self.escaping then return self.escape end
+  if self.gathering then return self.gatherpoint end
   local king = self.inst._castle ~= nil and self.inst._castle._king or nil
   if king ~= nil and king:IsValid() then
     local point = king:GetPosition()
     return Vector3(point.x+self.offset.x, 0, point.z+self.offset.z)
   end
 end
+function KingGuard:GatherForBell(userid)
+  local king = self.inst._castle ~= nil and self.inst._castle._king or nil
+  if king == nil or not king:IsValid() then return end
+  local point = king:GetPosition()
+  local dx, dz = self.offset.x, self.offset.z
+  local distance = math.sqrt(dx*dx+dz*dz)
+  if distance == 0 then dx, dz, distance = 1, 0, 1 end
+  self.gatherpoint = Vector3(point.x+dx/distance*HELPERS.KING_COURT_GATHER_RADIUS, 0,
+    point.z+dz/distance*HELPERS.KING_COURT_GATHER_RADIUS)
+  self.gathering, self.hostile, self.enemyuserid = true, false, userid
+  self._native_active = nil
+  self.inst.components.combat:DropTarget()
+  self.inst:ClearBufferedAction()
+  if self.inst.components.sleeper ~= nil then self.inst.components.sleeper:WakeUp() end
+  self.inst:SetBrain(CourtBrain)
+end
+function KingGuard:IsAtGatherPoint()
+  return self.gathering and self.gatherpoint ~= nil
+    and self.inst:GetDistanceSqToPoint(self.gatherpoint) <= HELPERS.KING_COURT_ARRIVAL_DISTANCE^2
+end
 function KingGuard:AttackPlayer(userid)
+  self.gathering, self.gatherpoint = nil, nil
   self.hostile, self.enemyuserid = true, userid
   self:Update()
 end
@@ -73,12 +96,16 @@ function KingGuard:Update()
 end
 function KingGuard:OnSave()
   return {hostile = self.hostile, enemyuserid = self.enemyuserid, offset = self.offset,
+    gathering = self.gathering,
+    gatherpoint = self.gatherpoint ~= nil and {x = self.gatherpoint.x, z = self.gatherpoint.z} or nil,
     escaping = self.escaping, escape = self.escape ~= nil and {x = self.escape.x, z = self.escape.z} or nil}
 end
 function KingGuard:OnLoad(data)
   if data == nil then return end
   self.hostile, self.enemyuserid = data.hostile, data.enemyuserid
   self.offset, self.escaping = data.offset or self.offset, data.escaping
+  self.gathering = data.gathering
+  if data.gatherpoint ~= nil then self.gatherpoint = Vector3(data.gatherpoint.x, 0, data.gatherpoint.z) end
   if data.escape ~= nil then self:Escape(Vector3(data.escape.x, 0, data.escape.z)) end
 end
 return KingGuard

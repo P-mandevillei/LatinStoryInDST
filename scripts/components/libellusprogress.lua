@@ -437,12 +437,21 @@ function LibellusProgress:DialogLoop(inst)
     say_func = self.SayChapterFourRex
   elseif chapter == "ch5" then
     if dialog <= DIALOG.CH5_SEP[1] then say_func = self.SayChapterFiveGifts
-    elseif dialog <= DIALOG.CH5_SEP[2] then say_func = self.SayChapterFiveSenex end
+    elseif dialog <= DIALOG.CH5_SEP[2] then say_func = self.SayChapterFiveSenex
+    elseif dialog == DIALOG.CH5_SEP[3] then say_func = self.SayChapterSixApproach end
   elseif chapter == "ch6" and dialog <= DIALOG.CH6_SEP[5] then
     say_func = self.SayChapterSix
   end
   local delay = say_func(self, inst, chapter, dialog, revision)
   self:ScheduleDialogLoop(delay)
+end
+
+function LibellusProgress:SayChapterSixApproach(inst, chapter, dialog, revision)
+  local castle = self._castle
+  if castle == nil or not castle:IsValid() or not inst:IsNear(castle, HELPERS.CASTLE_SEE_DISTANCE)
+    or not CanEntitySeeTarget(inst, castle) then return HELPERS.CHECK_PROGRESS_INTERVAL end
+  if not self:SetProgress("ch6", 1, revision) then return HELPERS.CHECK_PROGRESS_INTERVAL end
+  return self:SayChapterSix(inst, "ch6", 1, self._progress_revision)
 end
 
 function LibellusProgress:SetChapterSixPending(line)

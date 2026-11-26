@@ -1,4 +1,4 @@
--- Only the peaceful formation and Lupa's escape are custom movement. The
+-- The peaceful formation, gathering at Rex, and Lupa's escape use custom movement. The
 -- four hostile Animi use their original boss brains and stategraphs.
 local CourtMove = Class(BehaviourNode, function(self, inst)
   BehaviourNode._ctor(self, "CourtMove")

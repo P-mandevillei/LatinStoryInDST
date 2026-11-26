@@ -224,10 +224,12 @@ test("sight gates each conversation, night sleeps everyone else, then restores e
   animal:AddComponent("locomotor")
   animal:AddComponent("sleeper")
   castle.visible = false
-  progress:SetProgress("ch6", 1)
+  progress:SetProgress("ch5", DIALOG.CH5_SEP[3])
   progress:DialogLoop(player)
   advance(3)
   equal(#H.speeches(), 0)
+  equal(progress.chapter, "ch5")
+  equal(progress.dialog, DIALOG.CH5_SEP[3])
   castle.visible = true
   castle._lupa.visible = false
   advance(12)
@@ -280,7 +282,7 @@ test("no trading before the final royal speech finishes; ordinary gifts do not b
   equal(progress.dialog, 12)
 end)
 
-test("bell says twelve immediately, frees Lupa, enables native boss combat, and waits for actual stomp", function()
+test("bell says twelve immediately, frees Lupa, gathers the court, then enables native boss combat", function()
   local player, progress, castle = Encounter()
   progress:SetProgress("ch6", 12)
   progress:DialogLoop(player)
@@ -296,10 +298,22 @@ test("bell says twelve immediately, frees Lupa, enables native boss combat, and 
   local escape = castle._lupa.components.kingguard:GetDestination()
   assert((escape.x-castle._king.position.x)^2+(escape.z-castle._king.position.z)^2 > 20^2)
   for _, guard in ipairs(castle._guards) do
-    equal(guard.brain, package.loaded["brains/"..guard.nativeboss.."brain"])
-    equal(guard.components.combat.target, player)
+    equal(guard.brain, package.loaded["brains/kingcourtbrain"])
+    equal(guard.components.combat.target, nil)
+    local destination = guard.components.kingguard:GetDestination()
+    assert(guard:GetDistanceSqToPoint(destination) > HELPERS.KING_COURT_ARRIVAL_DISTANCE^2)
+    assert(castle._king:GetDistanceSqToPoint(destination) <= HELPERS.KING_COURT_GATHER_RADIUS^2+.001)
+    guard.position = destination
     equal(guard.components.combat:CanTarget(castle._king), false)
     equal(guard.components.combat:CanTarget(castle._lupa), false)
+  end
+  advance(.1)
+  advance(HELPERS.KING_COURT_HOLD_TIME-.2)
+  for _, guard in ipairs(castle._guards) do equal(guard.components.combat.target, nil) end
+  advance(.3)
+  for _, guard in ipairs(castle._guards) do
+    equal(guard.brain, package.loaded["brains/"..guard.nativeboss.."brain"])
+    equal(guard.components.combat.target, player)
     guard.components.combat.targetfn(guard)
     equal(guard.native_target_updates, 1)
   end
@@ -346,7 +360,105 @@ test("save/load restores encounter references without rebuilding, and resumes a 
   local restored = SpawnPrefab("animus_dragonfly")
   restored.components.kingguard:OnLoad(saved)
   advance(1)
-  equal(restored.components.combat.target, player)
+  equal(restored.components.combat.target, nil)
+  equal(restored.components.kingguard.gathering, true)
+  equal(restored.components.kingguard:GetDestination().x, guard:GetDestination().x)
+  equal(restored.components.kingguard:GetDestination().z, guard:GetDestination().z)
+end)
+
+test("castle sighting waits for chapter five's final line and requires sight and range", function()
+  local player, progress, castle = Encounter()
+  progress:SetProgress("ch5", DIALOG.CH5_SEP[2])
+  progress:DialogLoop(player)
+  advance(3)
+  equal(progress.chapter, "ch5")
+  equal(progress.dialog, DIALOG.CH5_SEP[2])
+  progress:SetProgress("ch5", DIALOG.CH5_SEP[3])
+  player.position = Vector3(HELPERS.CASTLE_SEE_DISTANCE+1, 0, 0)
+  progress:DialogLoop(player)
+  advance(3)
+  equal(progress.chapter, "ch5")
+  equal(#H.speeches(), 0)
+  player.position = castle:GetPosition()
+  advance(2)
+  equal(progress.chapter, "ch6")
+  equal(H.speeches()[1].content, DIALOG.ch6[1].content)
+end)
+
+test("court waits for every survivor, resets its pause if displaced, and skips dead guards", function()
+  local player, progress, castle = Encounter()
+  progress:SetProgress("ch6", DIALOG.CH6_SEP[4])
+  assert(GiftBell(player, castle))
+  for i = 1, #castle._guards-1 do
+    local guard = castle._guards[i]
+    guard.position = guard.components.kingguard:GetDestination()
+  end
+  advance(HELPERS.KING_COURT_HOLD_TIME+1)
+  equal(castle._court_hold_until, nil)
+  for _, guard in ipairs(castle._guards) do equal(guard.components.combat.target, nil) end
+  local last = castle._guards[#castle._guards]
+  last.components.health:DoDelta(-last.components.health.maxhealth)
+  advance(2)
+  assert(castle._court_hold_until ~= nil)
+  local displaced = castle._guards[1]
+  displaced.position = Vector3(8, 0, 8)
+  advance(.2)
+  equal(castle._court_hold_until, nil)
+  displaced.position = displaced.components.kingguard:GetDestination()
+  advance(HELPERS.KING_COURT_HOLD_TIME-.1)
+  equal(displaced.components.combat.target, nil)
+  advance(.3)
+  equal(displaced.components.combat.target, player)
+  equal(last.components.kingguard.hostile, false)
+end)
+
+test("a saved court pause resumes its remaining duration before attacking", function()
+  local player, progress, castle = Encounter()
+  progress:SetProgress("ch6", DIALOG.CH6_SEP[4])
+  assert(GiftBell(player, castle))
+  for _, guard in ipairs(castle._guards) do guard.position = guard.components.kingguard:GetDestination() end
+  advance(2.1)
+  local data, refs = {}, {}
+  castle:OnSave(data)
+  assert(math.abs(data.court_hold_remaining-2) < .001)
+  for guid, ent in pairs(Ents) do refs[guid] = {entity = ent} end
+  castle:Remove()
+  advance(100)
+  local loaded = SpawnPrefab("king_castle")
+  loaded:OnLoad(data)
+  loaded:OnLoadPostPass(refs, data)
+  advance(1.8)
+  for _, guard in ipairs(loaded._guards) do equal(guard.components.combat.target, nil) end
+  advance(.4)
+  for _, guard in ipairs(loaded._guards) do equal(guard.components.combat.target, player) end
+end)
+
+test("Animi gathered beside Rex can die in the stomp before their attack pause ends", function()
+  local player, progress, castle = Encounter()
+  progress:SetProgress("ch6", DIALOG.CH6_SEP[4])
+  progress:DialogLoop(player)
+  assert(GiftBell(player, castle))
+  for _, guard in ipairs(castle._guards) do guard.position = guard.components.kingguard:GetDestination() end
+  advance(.2)
+  local foot = Entity()
+  foot.position = castle._king:GetPosition()
+  foot.Stomp = function(inst)
+    for _, guard in ipairs(castle._guards) do
+      if inst:IsNear(guard, HELPERS.KING_COURT_GATHER_RADIUS+HELPERS.KING_COURT_ARRIVAL_DISTANCE) then
+        guard.components.health:DoDelta(-guard.components.health.maxhealth)
+      end
+    end
+  end
+  Scene.SetupFoot(foot)
+  foot:Stomp()
+  assert(castle._king_dead)
+  advance(12)
+  for _, guard in ipairs(castle._guards) do
+    assert(guard.components.health:IsDead())
+    equal(guard.components.combat.target, nil)
+    equal(guard.components.kingguard.hostile, false)
+  end
+  equal(progress.dialog, DIALOG.CH6_SEP[5]+1)
 end)
 
 test("night interruption, disconnect, and saved pending speech restore time and sleeping state", function()
