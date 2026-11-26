@@ -13,6 +13,7 @@ local function Populate(inst)
   if inst._passer ~= nil then
     inst._passer.Transform:SetPosition(point:Get())
     inst._passer:FacePoint(point.x - dx, 0, point.z - dz)
+    inst._passer._grove = inst
   end
   -- Nine rows of nine trees fill the 27-unit square with room to walk between.
   for x = -12, 12, 3 do
@@ -26,6 +27,26 @@ local function Populate(inst)
   end
 end
 
+local function FreePasser(inst, cage)
+  if inst._released or inst._passer ~= cage then return false end
+  local bird = SpawnPrefab("passer_free")
+  if bird == nil then return false end
+  bird.Transform:SetPosition(cage.Transform:GetWorldPosition())
+  bird._grove = inst
+  local point = inst:GetPosition()
+  local dx, dz = inst._grove_dx or 0, inst._grove_dz or 1
+  local center = HELPERS.GetPasserClearing(point, dx, dz)
+  local distance = HELPERS.PASSER_GROVE_SIZE / 2 + 2
+  bird._flight_target = Vector3(center.x - dx * distance, 0, center.z - dz * distance)
+  inst._passer, inst._released = bird, true
+  -- The encounter belongs to its story player even if a friend hammers it.
+  for _, player in ipairs(AllPlayers) do
+    local progress = player.components.libellusprogress
+    if progress ~= nil then progress:OnPasserFreed(inst) end
+  end
+  return true
+end
+
 local function fn()
   local inst = CreateEntity()
   inst.entity:AddTransform()
@@ -35,9 +56,11 @@ local function fn()
   inst.entity:SetPristine()
   if not TheWorld.ismastersim then return inst end
   inst._trees = {}
+  inst.FreePasser = FreePasser
   inst.OnSave = function(inst, data)
     data.owneruserid, data.populated = inst._libellus_owneruserid, inst._populated
     data.dx, data.dz = inst._grove_dx, inst._grove_dz
+    data.released = inst._released
     data.trees = {}
     local refs = {}
     if inst._passer ~= nil and inst._passer:IsValid() then
@@ -53,11 +76,13 @@ local function fn()
     if data ~= nil then
       inst._libellus_owneruserid, inst._populated = data.owneruserid, data.populated
       inst._grove_dx, inst._grove_dz = data.dx, data.dz
+      inst._released = data.released
     end
   end
   inst.OnLoadPostPass = function(inst, ents, data)
     if data == nil then return end
     inst._passer = data.passer ~= nil and ents[data.passer] ~= nil and ents[data.passer].entity or nil
+    if inst._passer ~= nil then inst._passer._grove = inst end
     for _, guid in ipairs(data.trees or {}) do
       if ents[guid] ~= nil then table.insert(inst._trees, ents[guid].entity) end
     end

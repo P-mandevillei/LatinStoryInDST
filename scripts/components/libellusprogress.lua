@@ -37,6 +37,10 @@ function LibellusProgress:OnSave()
     chapter = self.chapter,
     dialog = self.dialog,
     casa_cleared = self._casa_cleared,
+    rex_panflute_received = self._rex_panflute_received,
+    rex_bell_received = self._rex_bell_received,
+    passer_to_rex_remaining = self._passer_to_rex_time ~= nil
+      and math.max(0, self._passer_to_rex_time - GetTime()) or nil,
     ch3_reflection_remaining = self._ch3_reflection_time ~= nil
       and math.max(0, self._ch3_reflection_time - GetTime()) or nil,
     spawnpoint = point ~= nil and {x = point.x, y = point.y, z = point.z} or nil
@@ -56,6 +60,10 @@ function LibellusProgress:OnLoad(data)
   if data ~= nil then
     self:SetProgress(data.chapter, data.dialog)
     self._casa_cleared = data.casa_cleared
+    self._rex_panflute_received, self._rex_bell_received = data.rex_panflute_received, data.rex_bell_received
+    if data.passer_to_rex_remaining ~= nil then
+      self._passer_to_rex_time = GetTime() + math.max(0, data.passer_to_rex_remaining)
+    end
     if data.ch3_reflection_remaining ~= nil then
       self._ch3_reflection_time = GetTime() + math.max(0, data.ch3_reflection_remaining)
     end
@@ -226,11 +234,22 @@ function LibellusProgress:GetPasser()
   return passer ~= nil and passer:IsValid() and passer or nil
 end
 
+function LibellusProgress:OnPasserFreed(grove)
+  if self._passer_grove ~= grove and (grove._libellus_owneruserid == nil
+    or grove._libellus_owneruserid ~= self.inst.userid) then return end
+  self._passer_grove = grove
+  local chapter_number = tonumber(self.chapter:match("^ch(%d+)$"))
+  if chapter_number ~= nil and chapter_number < 4 then
+    self:SetProgress("ch4", 1)
+  end
+end
+
 -- Ambient line eleven is independent of story progress, but never interrupts
 -- this bird's conversation with any player.
 function LibellusProgress:CheckPasserSight(inst)
   local passer = self:GetPasser()
-  if passer ~= nil and not inst.loadingprotection and not inst:HasTag("playerghost")
+  if passer ~= nil and not passer:HasTag("libellus_passer_free")
+    and not inst.loadingprotection and not inst:HasTag("playerghost")
     and inst:IsNear(passer, HELPERS.PASSER_SEE_DISTANCE) and CanEntitySeeTarget(inst, passer)
     and not passer.components.talker:IsTalking()
     and (passer._conversation_until == nil or GetTime() >= passer._conversation_until)
@@ -241,6 +260,34 @@ function LibellusProgress:CheckPasserSight(inst)
     end
   end
   inst:DoTaskInTime(HELPERS.CHECK_PROGRESS_INTERVAL, function(inst) self:CheckPasserSight(inst) end)
+end
+
+function LibellusProgress:EnsureRex()
+  if self._rex ~= nil and self._rex:IsValid() then return self._rex end
+  local origin = self._spawnpoint or self.inst:GetPosition()
+  local nearest, distance = nil, math.huge
+  for _, ent in pairs(Ents) do
+    if ent.prefab == "pigking" and ent:IsValid() then
+      local point = ent:GetPosition()
+      local d = (point.x-origin.x)^2 + (point.z-origin.z)^2
+      if d < distance then nearest, distance = ent, d end
+    end
+  end
+  self._rex = nearest
+  return nearest
+end
+
+function LibellusProgress:GuidePasserToRex()
+  local passer, king = self:GetPasser(), self:EnsureRex()
+  if passer == nil or not passer:HasTag("libellus_passer_free") or passer._rex_guided or king == nil then return end
+  local point, from = king:GetPosition(), passer:GetPosition()
+  local dx, dz = from.x-point.x, from.z-point.z
+  local length = math.sqrt(dx*dx + dz*dz)
+  if length > 0 then dx, dz = dx/length, dz/length else dx, dz = 0, 1 end
+  local locomotor = self.inst.components.locomotor
+  local speed = locomotor ~= nil and locomotor:GetWalkSpeed() or TUNING.WILSON_WALK_SPEED
+  passer._rex_guided = true
+  passer:StartFlight(Vector3(point.x + dx*3.5, 0, point.z + dz*3.5), speed, self.inst.userid)
 end
 
 function LibellusProgress:GetShip()
@@ -279,7 +326,8 @@ function LibellusProgress:DialogLoop(inst)
     self:EnsureCasa()
     self:EnsureFarm()
     self:EnsureNavis()
-    self:EnsurePasser()
+    local grove = self:EnsurePasser()
+    if grove ~= nil and grove._released then self:OnPasserFreed(grove) end
     if self._casa_cleared and self._casa ~= nil and self._casa:IsValid() then
       self._casa:ClearEncounter()
     end
@@ -303,6 +351,10 @@ function LibellusProgress:DialogLoop(inst)
   end
 
   local chapter, dialog = self:GetProgress()
+  if chapter == "ch4" and dialog > DIALOG.CH4_SEP[1]
+    and (self._passer_to_rex_time == nil or GetTime() >= self._passer_to_rex_time) then
+    self:GuidePasserToRex()
+  end
   local ship_dialog = chapter == "ch3" and dialog > DIALOG.CH3_SEP[1]
     and dialog <= DIALOG.CH3_SEP[2]
   if (self._entry_speech_until ~= nil and GetTime() < self._entry_speech_until)
@@ -330,6 +382,10 @@ function LibellusProgress:DialogLoop(inst)
     if dialog <= DIALOG.CH3_SEP[2] then say_func = self.SayChapterThreeShip
     elseif dialog <= DIALOG.CH3_SEP[3] then say_func = self.SayChapterThreeReflection
     elseif dialog <= DIALOG.CH3_SEP[5] then say_func = self.SayChapterThreePasser end
+  elseif chapter == "ch4" and dialog <= DIALOG.CH4_SEP[1] then
+    say_func = self.SayChapterFourPasser
+  elseif chapter == "ch4" and dialog <= DIALOG.CH4_SEP[2] then
+    say_func = self.SayChapterFourRex
   end
   local delay = say_func(self, inst, chapter, dialog, revision)
   inst:DoTaskInTime(delay, function(inst)
@@ -612,6 +668,68 @@ function LibellusProgress:SayChapterThreePasser(inst, chapter, dialog, revision)
         inst:DoTaskInTime(HELPERS.DIALOG_INTERVAL, function()
           self:SetProgress("ch4", 1, finish_revision)
         end)
+      end
+      return HELPERS.DIALOG_INTERVAL
+    end)
+end
+
+function LibellusProgress:SayChapterFourPasser(inst, chapter, dialog, revision)
+  local passer = self:GetPasser()
+  if passer == nil or not passer:HasTag("libellus_passer_free") or not passer._arrived then
+    return HELPERS.CHECK_PROGRESS_INTERVAL
+  end
+  local line = DIALOG[chapter][dialog]
+  local speaker = line.name == "Passer" and passer or inst
+  if IsBusy(speaker) then return HELPERS.BUSY_INTERVAL end
+  passer._conversation_until = GetTime() + HELPERS.DIALOG_INTERVAL + HELPERS.BUSY_INTERVAL
+  passer:FacePoint(inst.Transform:GetWorldPosition())
+  inst:FacePoint(passer.Transform:GetWorldPosition())
+  return self:Say(speaker, chapter, dialog, revision, line.content,
+    function(d) return chapter, d + 1 end,
+    function()
+      if dialog == DIALOG.CH4_SEP[1] then self._passer_to_rex_time = GetTime() + HELPERS.DIALOG_INTERVAL end
+      return HELPERS.DIALOG_INTERVAL
+    end)
+end
+
+function LibellusProgress:FinishChapterFourRex(revision)
+  if revision ~= self._progress_revision then return end
+  local king = self:EnsureRex()
+  if king == nil then self._rex_finish_revision = nil; return end
+  if not self._rex_panflute_received then
+    self._rex_panflute_received = king:GiveLibellusGift("panflute", self.inst)
+  end
+  if not self._rex_bell_received then
+    self._rex_bell_received = king:GiveLibellusGift("bell", self.inst)
+  end
+  if self._rex_panflute_received and self._rex_bell_received then
+    if king.sg ~= nil and king.sg:HasStateTag("idle") then king.sg:GoToState("cointoss") end
+    self:SetProgress("ch5", 1, revision)
+  else
+    self.inst:DoTaskInTime(HELPERS.CHECK_PROGRESS_INTERVAL, function() self:FinishChapterFourRex(revision) end)
+  end
+end
+
+function LibellusProgress:SayChapterFourRex(inst, chapter, dialog, revision)
+  local king = self:EnsureRex()
+  if king == nil or not inst:IsNear(king, HELPERS.REX_MEETING_DISTANCE)
+    or (king.IsMinigameActive ~= nil and king:IsMinigameActive())
+    or (king.sg ~= nil and king.sg.mem ~= nil and king.sg.mem.sleeping)
+    or (self._passer_to_rex_time ~= nil and GetTime() < self._passer_to_rex_time) then
+    return HELPERS.CHECK_PROGRESS_INTERVAL
+  end
+  if self._rex_finish_revision == revision then return HELPERS.CHECK_PROGRESS_INTERVAL end
+  local line = DIALOG[chapter][dialog]
+  local speaker = line.name == "Rex animalium" and king._libellus_rex_voice or inst
+  if speaker == nil or not speaker:IsValid() or IsBusy(speaker) then return HELPERS.BUSY_INTERVAL end
+  inst:FacePoint(king.Transform:GetWorldPosition())
+  return self:Say(speaker, chapter, dialog, revision, line.content,
+    function(d) return chapter, d < DIALOG.CH4_SEP[2] and d + 1 or d end,
+    function()
+      if dialog == DIALOG.CH4_SEP[2] then
+        self._rex_finish_revision = self._progress_revision
+        local finish_revision = self._progress_revision
+        inst:DoTaskInTime(HELPERS.DIALOG_INTERVAL, function() self:FinishChapterFourRex(finish_revision) end)
       end
       return HELPERS.DIALOG_INTERVAL
     end)

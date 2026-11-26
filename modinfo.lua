@@ -1,7 +1,7 @@
 name = "latinPresentation"
 description = "Latin Final Project Libellus Presentation"
 author = "p_mandevillei"
-version = "0.0.1"
+version = "0.0.2"
 forumthread = ""
 -- icon_atlas = ""
 -- icon = ""
@@ -12,6 +12,10 @@ dont_starve_compatible = false
 reign_of_giants_compatible = false
 priority = -1e30
 api_version = 10
+-- Bigfoot Returns supplies the Old Bell and the replicated Biiigfoot encounter.
+mod_dependencies = {
+  {workshop = "workshop-2522543318"}
+}
 configuration_options = {
   {
     name = "dialog_selector",

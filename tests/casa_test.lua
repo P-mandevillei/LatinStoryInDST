@@ -25,6 +25,8 @@ TUNING.BOAT = {RADIUS = 4}
 TILE_SCALE = 4
 EQUIPSLOTS = {HANDS = "hands"}
 FRAMES = 1/30
+ACTIONS = {HAMMER = "hammer"}
+TWOPI = 2 * math.pi
 WORLD_TILES = {GRASS = 1, CARPET = 2, SAVANNA = 3, FOREST = 4}
 TileGroupManager = {IsLandTile = function() return true end}
 
@@ -46,6 +48,8 @@ local function reset()
   function TheWorld.Map:GetTileCoordsAtPoint(x, y, z) return math.floor(x / 4), math.floor(z / 4) end
   function TheWorld.Map:GetTile() return WORLD_TILES.GRASS end
   function TheWorld.Map:SetTile() end
+  function TheWorld.Map:IsLandTileAtPoint() return true end
+  function TheWorld.Map:IsDockAtPoint() return false end
   TheSim = {FindEntities = function(_, x, y, z, radius, musttags, excludetags)
     if obstacle and musttags == nil then return {{GetPhysicsRadius = function() return 1 end}} end
     local found = {}
@@ -100,10 +104,14 @@ local function Entity()
   end
   function inst:HasTag(tag) return self.tags[tag] == true end
   function inst:AddTag(tag) self.tags[tag] = true end
+  function inst:RemoveTag(tag) self.tags[tag] = nil end
   function inst:RemoveComponent(name) self.components[name] = nil end
   function inst:SetPrefabName(name) self.prefab = name end
   function inst:SetPrefabNameOverride(name) self.nameoverride = name end
   function inst:GetPosition() return Vector3(self.position:Get()) end
+  function inst:GetDistanceSqToPoint(point)
+    return (self.position.x-point.x)^2 + (self.position.z-point.z)^2
+  end
   function inst:GetCurrentPlatform() return self.platform end
   function inst:GetPhysicsRadius() return self.radius or 0 end
   function inst:IsNear(other, distance)
@@ -115,8 +123,10 @@ local function Entity()
   function inst:PushEvent(name, data)
     if self.events[name] ~= nil then self.events[name](self, data) end
   end
-  function inst:DoTaskInTime(delay, fn)
-    local task = {at = now + delay, fn = fn, inst = self}
+  function inst:DoTaskInTime(delay, fn, ...)
+    local args, n = {...}, select("#", ...)
+    local unpack_args = unpack or table.unpack
+    local task = {at = now + delay, fn = function(inst) fn(inst, unpack_args(args, 1, n)) end, inst = self}
     function task:Cancel() self.cancelled = true end
     table.insert(tasks, task)
     return task
@@ -126,12 +136,14 @@ local function Entity()
     task.period = period
     return task
   end
-  inst.entity = setmetatable({SetPristine = function() inst.pristine = true end,
+  inst.entity = setmetatable({_inst = inst, SetParent = function(_, parent) inst.parent = parent._inst end,
+    SetPristine = function() inst.pristine = true end,
     GetParent = function() return nil end}, {__index = function() return noop end})
-  inst.Transform = {SetFourFaced = noop}
+  inst.Transform = {SetFourFaced = noop, SetTwoFaced = noop, SetScale = noop}
   function inst.Transform:GetWorldPosition() return inst.position:Get() end
   function inst.Transform:SetPosition(x, y, z) inst.position = Vector3(x, y, z) end
-  inst.Physics = {Teleport = function(_, x, y, z) inst.Transform:SetPosition(x, y, z) end}
+  inst.Physics = {Teleport = function(_, x, y, z) inst.Transform:SetPosition(x, y, z) end,
+    SetVel = function(_, x, y, z) inst.velocity = Vector3(x, y, z) end}
   inst.AnimState = {Hide = noop, Show = noop, OverrideSymbol = noop, PushAnimation = noop,
     AddOverrideBuild = function(self, build) self.overridebuild = build end}
   function inst.AnimState:SetBank(value) self.bank = value end
@@ -168,6 +180,7 @@ local function Entity()
         return self.currenthealth - before
       end
     elseif name == "combat" then
+      function c:EnableAreaDamage() end
       function c:SetDefaultDamage(value) self.damage, self.defaultdamage = value, value end
       function c:SetAttackPeriod(value) self.period = value end
       function c:SetRange(value) self.attackrange, self.hitrange = value, value end
@@ -193,6 +206,7 @@ local function Entity()
     elseif name == "follower" then
       function c:SetLeader(leader) self.leader = leader end
     elseif name == "locomotor" then
+      function c:GetWalkSpeed() return (self.walkspeed or 4) * (self.speedmult or 1) end
       function c:Stop() self.stopped = true end
       function c:GoToPoint(point) self.destination = point end
       function c:SetAllowPlatformHopping(enabled) self.allow_platform_hopping = enabled end
@@ -202,6 +216,20 @@ local function Entity()
       function c:GetDamage() return self.damage end
       function c:CanRangedAttack() return false end
       function c:OnAttack() end
+    elseif name == "workable" then
+      function c:SetWorkAction(action) self.action = action end
+      function c:SetWorkLeft(amount) self.workleft = amount end
+      function c:SetOnFinishCallback(fn) self.onfinish = fn end
+      function c:SetOnWorkCallback(fn) self.onwork = fn end
+      function c:CanBeWorked() return self.workleft ~= 0 end
+      function c:Destroy() inst.destroyed = true; inst:Remove() end
+      function c:WorkedBy(worker)
+        self.workleft = self.workleft - 1
+        if self.workleft > 0 then self.onwork(inst, worker)
+        else self.onfinish(inst, worker) end
+      end
+    elseif name == "inventoryitem" then
+      function c:GetGrandOwner() return self.owner end
     end
     return c
   end
@@ -210,6 +238,7 @@ end
 CreateEntity = Entity
 function MakeCharacterPhysics(inst, mass, radius) inst.radius = radius end
 function MakeObstaclePhysics(inst, radius) inst.radius = radius end
+function MakeInventoryPhysics() end
 function SpawnPrefab(name)
   local inst
   if factories[name] ~= nil then
@@ -249,6 +278,13 @@ function SpawnPrefab(name)
       end}
     elseif name == "steeringwheel" then
       inst.components.steeringwheel = {}
+    elseif name == "collapse_small" then
+      function inst:SetMaterial(material) self.material = material end
+    elseif name == "pigking" then
+      inst.components.trader = {onaccept = function() end}
+      inst.sg.mem = {}
+      function inst:IsMinigameActive() return self.minigame_active == true end
+      require("rexanimalium").Setup(inst)
     elseif name == "evergreen" then
       inst:AddTag("tree")
       inst.components.growable = {}
@@ -280,6 +316,7 @@ end
 package.loaded["brains/milesbrain"] = {}
 package.loaded["brains/agricolabrain"] = {}
 package.loaded["brains/senexbrain"] = {}
+package.loaded["brains/passerbrain"] = {ForceUpdate = noop}
 local plant_defs = {}
 for _, crop in ipairs({"carrot", "corn", "potato", "tomato", "pumpkin"}) do
   plant_defs[crop] = {bank = "farm_plant_" .. crop, build = "farm_plant_" .. crop}
@@ -290,7 +327,7 @@ local DIALOG = require("libellus")
 local Progress = require("components/libellusprogress")
 Prefabs = {evergreen = {fn = function() return SpawnPrefab("evergreen") end}}
 for _, name in ipairs({"casa", "lupa", "miles", "agricola", "agricola_crop", "agricola_farm", "navis", "senex",
-  "passer", "passer_grove", "passer_burnt_tree"}) do
+  "passer", "passer_grove", "passer_burnt_tree", "passer_free", "rex_voice"}) do
   factories[name] = require("prefabs/" .. name).fn
 end
 local count = 0
@@ -1469,16 +1506,335 @@ test("grove reload restores cage and trees without clearing or duplicating them"
   equal(loaded._grove_dz, 1)
 end)
 
+local function HammerCage(cage, player)
+  equal(cage.components.workable.action, ACTIONS.HAMMER)
+  for i = 1, 3 do cage.components.workable:WorkedBy(player); equal(cage:IsValid(), true) end
+  cage.components.workable:WorkedBy(player)
+end
+
+-- Drive the actual flight brain and stategraph with the mocked task clock.
+local function StartPasserFlight(bird)
+  BehaviourNode = Class(function() end)
+  function BehaviourNode:Sleep() end
+  Brain = Class(function(self, inst) self.inst = inst end)
+  function BT(inst, node) return {root = node} end
+  local graph = dofile("scripts/stategraphs/SGpasser.lua")
+  local states = {}
+  for _, state in ipairs(graph.states) do states[state.name] = state end
+  function bird.sg:SetTimeout(delay)
+    local state = self.currentstate
+    self.timeout = bird:DoTaskInTime(delay, function()
+      if self.currentstate == state and state.ontimeout ~= nil then state.ontimeout(bird) end
+    end)
+  end
+  function bird.sg:GoToState(name)
+    if self.timeout ~= nil then self.timeout:Cancel(); self.timeout = nil end
+    self.state, self.currentstate = name, states[name]
+    if self.currentstate.onenter ~= nil then self.currentstate.onenter(bird) end
+  end
+  bird.sg:GoToState("idle")
+  local BirdBrain = dofile("scripts/brains/passerbrain.lua")
+  local brain = BirdBrain(bird)
+  brain:OnStart()
+  bird:DoPeriodicTask(.05, function() brain.bt.root:Visit() end)
+end
+
+test("four hammer hits destroy the cage and release exactly one bird for its story owner", function()
+  local owner, progress, grove, cage = PasserEncounter()
+  progress:SetProgress("ch3", 13)
+  local helper, helperprogress = Player("helper")
+  helperprogress:SetProgress("ch2", 2)
+  HammerCage(cage, helper)
+  equal(cage:IsValid(), false)
+  equal(grove._released, true)
+  local bird = grove._passer
+  equal(bird.prefab, "passer_free")
+  equal(bird._grove, grove)
+  equal(bird.AnimState.bank, "crow")
+  equal(bird.AnimState.build, "robin_build")
+  equal(progress.chapter, "ch4")
+  equal(progress.dialog, 1)
+  equal(helperprogress.chapter, "ch2")
+  equal(helperprogress.dialog, 2)
+  equal(grove:FreePasser(cage), false)
+  equal(grove._passer, bird)
+  local center = HELPERS.GetPasserClearing(grove.position, 0, 1)
+  equal(bird._flight_target.x, center.x)
+  equal(bird._flight_target.z, center.z - HELPERS.PASSER_GROVE_SIZE / 2 - 2)
+end)
+
+test("released Passer visibly flies to the burnt grove and lands before chapter four speech", function()
+  local player, progress, grove, cage = PasserEncounter()
+  player.position = cage.position
+  progress:SetProgress("ch4", 1)
+  HammerCage(cage, player)
+  local bird = grove._passer
+  StartPasserFlight(bird)
+  progress:DialogLoop(player)
+  advance(1)
+  equal(#speeches, 0)
+  assert(bird.position.y > 0)
+  assert(bird.position.z > grove.position.z and bird.position.z < bird._flight_target.z)
+  equal(bird.AnimState.animation, "takeoff_diagonal_loop")
+  advance(3)
+  equal(bird._arrived, true)
+  equal(bird.position.y, 0)
+  equal(bird.position.z, bird._flight_target.z)
+  equal(bird.AnimState.animation, "idle")
+  equal(speeches[1].content, DIALOG.ch4[1].content)
+  advance(36)
+  equal(progress.chapter, "ch4")
+  equal(progress.dialog, 9)
+  equal(#speeches, 8)
+  for i, speech in ipairs(speeches) do
+    equal(speech.content, DIALOG.ch4[i].content)
+    equal(speech.speaker, DIALOG.ch4[i].name == "Passer" and bird or player)
+    if i > 1 then assert(speech.at >= speeches[i - 1].at + HELPERS.DIALOG_INTERVAL) end
+  end
+  advance(30)
+  equal(#speeches, 8)
+end)
+
+test("release interrupts pending chapter three completion without rewinding the new conversation", function()
+  local player, progress, grove, cage = PasserEncounter()
+  progress:SetProgress("ch3", 14)
+  player.position = cage.position
+  cage._conversation_until = now + 10
+  progress:DialogLoop(player)
+  equal(speeches[1].content, DIALOG.ch3[14].content)
+  HammerCage(cage, player)
+  StartPasserFlight(grove._passer)
+  advance(6)
+  equal(progress.chapter, "ch4")
+  assert(progress.dialog >= 2)
+end)
+
+test("mid-flight save resumes the released bird without restoring its cage", function()
+  local player, _, grove, cage = PasserEncounter()
+  HammerCage(cage, player)
+  local bird = grove._passer
+  StartPasserFlight(bird)
+  advance(1)
+  local data, birddata, ents = {}, {}, {}
+  grove:OnSave(data)
+  bird:OnSave(birddata)
+  equal(data.released, true)
+  equal(birddata.arrived, nil)
+  for _, ent in pairs(Ents) do ents[ent.GUID] = {entity = ent} end
+  local arriving = SpawnPrefab("passer_free")
+  arriving.Transform:SetPosition(bird.position:Get())
+  arriving:OnLoad(birddata)
+  ents[data.passer] = {entity = arriving}
+  local loaded = SpawnPrefab("passer_grove")
+  loaded:OnLoad(data)
+  loaded:OnLoadPostPass(ents, data)
+  bird:Remove()
+  local before = serial
+  advance(0)
+  equal(serial, before)
+  equal(loaded._released, true)
+  equal(loaded._passer, arriving)
+  equal(arriving._grove, loaded)
+  StartPasserFlight(arriving)
+  advance(4)
+  equal(arriving._arrived, true)
+  equal(arriving.position.z, birddata.target.z)
+  arriving:OnSave(birddata)
+  local landed = SpawnPrefab("passer_free")
+  landed.Transform:SetPosition(arriving.position:Get())
+  landed:OnLoad(birddata)
+  StartPasserFlight(landed)
+  advance(1)
+  equal(landed._arrived, true)
+  equal(landed.AnimState.animation, "idle")
+  equal(landed.position.y, 0)
+end)
+
+test("an already released encounter starts chapter four for an offline owner on return", function()
+  local owner, progress, grove, cage = PasserEncounter()
+  progress:SetProgress("ch3", 11)
+  AllPlayers = {}
+  HammerCage(cage, owner)
+  equal(progress.chapter, "ch3")
+  local arriving, restored = Player()
+  restored:OnLoad(progress:OnSave())
+  restored:DialogLoop(arriving)
+  equal(restored._passer_grove, grove)
+  equal(restored.chapter, "ch4")
+  equal(restored.dialog, 1)
+  restored:SetProgress("ch4", 9)
+  restored:OnPasserFreed(grove)
+  equal(restored.dialog, 9)
+end)
+
+local function RexEncounter()
+  local player, progress = Player()
+  progress:EnsurePublius()
+  local king = SpawnPrefab("pigking")
+  king.Transform:SetPosition(200, 0, 200)
+  return player, progress, king
+end
+
+local function CountPrefab(name)
+  local total = 0
+  for _, ent in pairs(Ents) do if ent.prefab == name then total = total + 1 end end
+  return total
+end
+
+test("Rex extends the existing Pig King without replacing his native trade or minigame functions", function()
+  local player, progress, king = RexEncounter()
+  local trader, onaccept, sg, minigame = king.components.trader, king.components.trader.onaccept, king.sg, king.IsMinigameActive
+  local voice = king._libellus_rex_voice
+  require("rexanimalium").Setup(king)
+  equal(king.prefab, "pigking")
+  equal(king.components.trader, trader)
+  equal(trader.onaccept, onaccept)
+  equal(king.sg, sg)
+  equal(king.IsMinigameActive, minigame)
+  equal(king._libellus_rex_voice, voice)
+  equal(voice.parent, king)
+  equal(voice.persists, false)
+  assert(voice.pristine and voice.components.talker ~= nil)
+  equal(progress:EnsureRex(), king)
+  player.position = Vector3(1000, 0, 1000)
+  equal(progress:EnsureRex(), king)
+  equal(CountPrefab("pigking"), 1)
+end)
+
+test("Rex plays nine through thirteen nearby and grants both gifts only after the final line", function()
+  local player, progress, king = RexEncounter()
+  progress:SetProgress("ch4", 9)
+  player.position = king.position + Vector3(HELPERS.REX_MEETING_DISTANCE + .01, 0, 0)
+  progress:DialogLoop(player)
+  advance(2)
+  equal(#speeches, 0)
+  player.position = king.position + Vector3(HELPERS.REX_MEETING_DISTANCE, 0, 0)
+  advance(22)
+  equal(#speeches, 5)
+  equal(progress.chapter, "ch4")
+  equal(progress.dialog, 13)
+  equal(CountPrefab("panflute"), 0)
+  equal(CountPrefab("bell"), 0)
+  for i = 9, 13 do
+    local speech = speeches[i - 8]
+    equal(speech.content, DIALOG.ch4[i].content)
+    equal(speech.speaker, DIALOG.ch4[i].name == "Rex animalium" and king._libellus_rex_voice or player)
+  end
+  advance(4.99)
+  equal(progress.chapter, "ch4")
+  advance(.01)
+  equal(progress.chapter, "ch5")
+  equal(progress.dialog, 1)
+  equal(CountPrefab("panflute"), 1)
+  equal(CountPrefab("bell"), 1)
+  local saved = progress:OnSave()
+  equal(saved.rex_panflute_received, true)
+  equal(saved.rex_bell_received, true)
+  progress:SetProgress("ch4", 13)
+  advance(10)
+  equal(CountPrefab("panflute"), 1)
+  equal(CountPrefab("bell"), 1)
+end)
+
+test("Rex conversation waits for night sleep, active native minigames, and player proximity", function()
+  local player, progress, king = RexEncounter()
+  player.position = king.position
+  progress:SetProgress("ch4", 9)
+  king.minigame_active = true
+  progress:DialogLoop(player)
+  advance(4)
+  equal(#speeches, 0)
+  king.minigame_active, king.sg.mem.sleeping = false, true
+  advance(2)
+  equal(#speeches, 0)
+  king.sg.mem.sleeping = false
+  advance(2)
+  equal(speeches[1].content, DIALOG.ch4[9].content)
+  player.position = Vector3(500, 0, 500)
+  advance(6)
+  equal(#speeches, 1)
+end)
+
+test("partial gift failures retry only the missing item and newer progress cancels all rewards", function()
+  local player, progress, king = RexEncounter()
+  player.position = king.position
+  progress:SetProgress("ch4", 13)
+  local give, attempts = king.GiveLibellusGift, 0
+  king.GiveLibellusGift = function(inst, prefab, player)
+    if prefab == "bell" then
+      attempts = attempts + 1
+      if attempts == 1 then return false end
+    end
+    return give(inst, prefab, player)
+  end
+  progress:DialogLoop(player)
+  advance(5)
+  equal(CountPrefab("panflute"), 1)
+  equal(CountPrefab("bell"), 0)
+  equal(progress:OnSave().rex_panflute_received, true)
+  advance(2)
+  equal(CountPrefab("panflute"), 1)
+  equal(CountPrefab("bell"), 1)
+  equal(progress.chapter, "ch5")
+  reset()
+  player, progress, king = RexEncounter()
+  player.position = king.position
+  progress:SetProgress("ch4", 13)
+  progress:DialogLoop(player)
+  progress:SetProgress("ch4", 12)
+  player.busy = true
+  advance(6)
+  equal(CountPrefab("panflute"), 0)
+  equal(CountPrefab("bell"), 0)
+end)
+
+test("Passer leaves after line eight finishes and tracks the player's effective walking speed", function()
+  local player, progress, grove, cage = PasserEncounter()
+  HammerCage(cage, player)
+  local bird = grove._passer
+  bird._arrived = true
+  local king = SpawnPrefab("pigking")
+  king.position = Vector3(300, 0, 100)
+  player:AddComponent("locomotor")
+  player.components.locomotor.walkspeed = 4
+  StartPasserFlight(bird)
+  progress:SetProgress("ch4", 8)
+  progress:DialogLoop(player)
+  advance(4.99)
+  equal(bird._rex_guided, nil)
+  advance(.11)
+  equal(bird._rex_guided, true)
+  equal(bird._guide_userid, player.userid)
+  local before = bird:GetPosition()
+  advance(1)
+  local after = bird:GetPosition()
+  assert(math.abs(math.sqrt((after.x-before.x)^2 + (after.z-before.z)^2) - 4) < .01)
+  player.components.locomotor.speedmult = 2
+  before = bird:GetPosition()
+  advance(1)
+  after = bird:GetPosition()
+  assert(math.abs(math.sqrt((after.x-before.x)^2 + (after.z-before.z)^2) - 8) < .01)
+  local data = {}
+  bird:OnSave(data)
+  equal(data.rex_guided, true)
+  equal(data.guideuserid, player.userid)
+  local restored = SpawnPrefab("passer_free")
+  restored:OnLoad(data)
+  equal(restored._rex_guided, true)
+  equal(restored._flight_target.x, bird._flight_target.x)
+end)
+
 test("client encounter prefabs have visuals and no server-only components", function()
   TheWorld.ismastersim = false
   for _, name in ipairs({"casa", "lupa", "miles", "agricola", "agricola_crop", "agricola_farm", "navis", "senex",
-    "passer", "passer_grove"}) do
+    "passer", "passer_grove", "passer_free", "rex_voice"}) do
     local inst = SpawnPrefab(name)
     assert(inst.pristine)
     equal(inst.components.combat, nil)
     equal(inst.components.health, nil)
     equal(inst.components.inventory, nil)
-    if name == "miles" or name == "agricola" or name == "senex" or name == "passer" then
+    if name == "miles" or name == "agricola" or name == "senex" or name == "passer" or name == "passer_free"
+      or name == "rex_voice" then
       assert(inst.components.talker ~= nil)
     end
   end

@@ -66,7 +66,8 @@ local DIALOG = {
     {name="Octavia", content="Unusquisque nostrum propter ignes dolet, sed a timore regis vinci non debemus."},
     {name="Octavia", content="Si auxilium nobis dederis, contra regem hominum tecum pugnabimus."},
     {name="Rex animalium", content="Bene. Dona divitia vobis do."},
-  }
+  },
+  ch5 = {}
 }
 
 DIALOG.CH1_SEP = {4, 5, #DIALOG.ch1}

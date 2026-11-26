@@ -22,8 +22,10 @@ PrefabFiles = {
   "navis",
   "senex",
   "passer",
+  "passer_free",
   "passer_grove",
-  "passer_burnt_tree"
+  "passer_burnt_tree",
+  "rex_voice"
 }
 
 -- name prefabs
@@ -34,7 +36,10 @@ HELPERS.add_quote("miles", "Miles", "Militem timeo!")
 HELPERS.add_quote("lupa", "Lupa", "Lupam bene curo et amo.")
 HELPERS.add_quote("agricola", "Agricola", "Agricola bonus est.")
 HELPERS.add_quote("senex", "Senex", "Militi similis est.")
-HELPERS.add_quote("passer", "Passer", "Passer in cavea habitat.")
+HELPERS.add_quote("passer", "Passer", "Passer calidus est.")
+HELPERS.add_quote("passer_free", "Passer", "Passer a me liberatur!")
+
+AddPrefabPostInit("pigking", require("rexanimalium").Setup)
 
 modimport("items/hugTest.lua")
 
