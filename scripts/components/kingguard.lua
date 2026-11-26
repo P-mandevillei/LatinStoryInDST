@@ -36,6 +36,10 @@ function KingGuard:FindTarget()
   end
 end
 function KingGuard:GetDestination()
+  if self.followuserid ~= nil then
+    local leader = self.inst.components.follower:GetLeader()
+    return leader ~= nil and leader:IsValid() and leader:GetPosition() or nil
+  end
   if self.escaping then return self.escape end
   if self.gathering then return self.gatherpoint end
   local king = self.inst._castle ~= nil and self.inst._castle._king or nil
@@ -43,6 +47,21 @@ function KingGuard:GetDestination()
     local point = king:GetPosition()
     return Vector3(point.x+self.offset.x, 0, point.z+self.offset.z)
   end
+end
+function KingGuard:FollowPlayer(player)
+  self.followuserid = player.userid
+  self.escaping, self.escape, self.gathering, self.gatherpoint, self.hostile = nil, nil, nil, nil, false
+  self.inst._libellus_owneruserid = player.userid
+  local follower = self.inst.components.follower
+  follower:SetLeader(player)
+  follower.neverexpire, follower.keepdeadleader, follower.keepleaderduringminigame = true, true, true
+  follower:KeepLeaderOnAttacked()
+  self.inst.components.combat:DropTarget()
+  self.inst.components.locomotor:Stop()
+  self.inst:ClearBufferedAction()
+  self.inst:AddTag("groundpound_immune")
+  self.inst.components.locomotor.runspeed = HELPERS.LUPA_FOLLOW_SPEED
+  self.inst:SetBrain(CourtBrain)
 end
 function KingGuard:GatherForBell(userid)
   local king = self.inst._castle ~= nil and self.inst._castle._king or nil
@@ -96,6 +115,7 @@ function KingGuard:Update()
 end
 function KingGuard:OnSave()
   return {hostile = self.hostile, enemyuserid = self.enemyuserid, offset = self.offset,
+    followuserid = self.followuserid,
     gathering = self.gathering,
     gatherpoint = self.gatherpoint ~= nil and {x = self.gatherpoint.x, z = self.gatherpoint.z} or nil,
     escaping = self.escaping, escape = self.escape ~= nil and {x = self.escape.x, z = self.escape.z} or nil}
@@ -103,6 +123,8 @@ end
 function KingGuard:OnLoad(data)
   if data == nil then return end
   self.hostile, self.enemyuserid = data.hostile, data.enemyuserid
+  self.followuserid = data.followuserid
+  if self.followuserid ~= nil then self.inst:AddTag("groundpound_immune") end
   self.offset, self.escaping = data.offset or self.offset, data.escaping
   self.gathering = data.gathering
   if data.gatherpoint ~= nil then self.gatherpoint = Vector3(data.gatherpoint.x, 0, data.gatherpoint.z) end

@@ -110,7 +110,7 @@ local DIALOG = {
     {name="Rex animalium", content="Lupam liberavistis! Terras nostras servavistis!"},
     {name="Animalia", content="Lupam liberavistis! Terras nostras servavistis!"},
     {name="Publilius", content="Me servavistis! Felix sum!"},
-    {name="Omnes", content="Felix sum!"},
+    {name="Octavia", content="Felix sum!"},
   }
 }
 
@@ -119,7 +119,7 @@ DIALOG.CH2_SEP = {2, 5, 6, 13, #DIALOG.ch2}
 DIALOG.CH3_SEP = {1, 8, 10, 11, #DIALOG.ch3}
 DIALOG.CH4_SEP = {8, #DIALOG.ch4}
 DIALOG.CH5_SEP = {11, 16, #DIALOG.ch5}
-DIALOG.CH6_SEP = {2, 6, 11, 12, 13, #DIALOG.ch6}
+DIALOG.CH6_SEP = {2, 6, 11, 12, 13, 14, 15, 16, #DIALOG.ch6}
 
 -- debug only
 local function printTable(tbl, indent)

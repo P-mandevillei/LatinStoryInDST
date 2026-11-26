@@ -29,7 +29,8 @@ PrefabFiles = {
   "king_castle",
   "rex",
   "king_court",
-  "king_scene_light"
+  "king_scene_light",
+  "publilius"
 }
 
 -- name prefabs
@@ -45,6 +46,7 @@ HELPERS.add_quote("passer_free", "Passer", "Passer a me liberatur!")
 HELPERS.add_quote("king_castle", "Regia", "Rex hic habitat.")
 HELPERS.add_quote("rex", "Rex", "Rex crudelis est.")
 HELPERS.add_quote("king_lupa", "Lupa", "Lupam liberare debemus.")
+HELPERS.add_quote("publilius", "Publilius", "Publilium servavimus!")
 for _, prefab in ipairs({"animus_dragonfly", "animus_deerclops", "animus_bearger", "animus_beequeen"}) do
   HELPERS.add_quote(prefab, "Animus Magnus", "Animum magnum video.")
 end

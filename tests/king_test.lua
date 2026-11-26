@@ -4,9 +4,53 @@ local H = dofile("tests/casa_test.lua")
 LIBELLUS_TEST_HARNESS = nil
 local equal, advance = H.equal, H.advance
 local HELPERS, DIALOG = require("helpers"), require("libellus")
+-- The Python runner supplies DST's real petleash. Keep the suite runnable
+-- with plain Lua when the optional native source loader is unavailable.
+if package.preload["components/gamepetleash"] == nil then
+  package.preload["components/gamepetleash"] = function()
+    local Leash = Class(function(self, inst)
+      self.inst, self.pets, self.maxpets, self.limits = inst, {}, 1, {}
+    end)
+    function Leash:GetPets() return self.pets end
+    function Leash:GetMaxPets() return self.maxpets end
+    function Leash:SetMaxPetsForPrefab(prefab, limit) self.limits[prefab] = limit end
+    function Leash:GetNumPetsForPrefab(prefab)
+      local count = 0
+      for pet in pairs(self.pets) do if pet.prefab == prefab then count = count+1 end end
+      return count
+    end
+    function Leash:Link(pet)
+      self.pets[pet], pet.persists = pet, false
+      self.inst.components.leader:AddFollower(pet)
+      return pet
+    end
+    function Leash:SpawnPetAt(x, y, z, prefab)
+      if self.limits[prefab] ~= nil and self:GetNumPetsForPrefab(prefab) >= self.limits[prefab] then return end
+      local pet = SpawnPrefab(prefab)
+      pet.Transform:SetPosition(x, y, z)
+      return self:Link(pet)
+    end
+    function Leash:OnSave()
+      local data = {pets = {}}
+      for pet in pairs(self.pets) do table.insert(data.pets, pet:GetSaveRecord()) end
+      return data
+    end
+    function Leash:OnLoad(data)
+      for _, record in ipairs(data.pets or {}) do
+        local pet = self:Link(SpawnSaveRecord(record))
+        if self.inst.migrationpets ~= nil then table.insert(self.inst.migrationpets, pet) end
+      end
+    end
+    function Leash:OnRemoveEntity() for pet in pairs(self.pets) do pet:Remove() end end
+    return Leash
+  end
+end
 local Progress = require("components/libellusprogress")
 local Scene = require("kingscene")
 package.loaded["brains/kingcourtbrain"] = {name = "court"}
+package.loaded["brains/celebrationpigbrain"] = {name = "celebration"}
+package.loaded["brains/pigbrain"] = {name = "pig"}
+package.loaded["brains/pigguardbrain"] = {name = "pigguard"}
 for _, name in ipairs({"dragonfly", "deerclops", "bearger", "beequeen"}) do
   package.loaded["brains/"..name.."brain"] = {name = name}
 end
@@ -15,6 +59,8 @@ WORLD_TILES.COTL_GOLD, WORLD_TILES.CARPET2 = 8, 9
 local function noop() end
 local function Entity()
   local inst = H.Entity()
+  function inst:IsAsleep() return self.asleep == true end
+  inst.PushEventImmediate = inst.PushEvent
   inst.MiniMapEntity.SetPriority, inst.MiniMapEntity.SetDrawOverFogOfWar = noop, noop
   inst.Light = {SetRadius = noop, SetIntensity = noop, SetFalloff = noop, SetColour = noop, Enable = noop}
   inst.AnimState.Pause = function() inst.paused = true end
@@ -25,14 +71,31 @@ local function Entity()
     return (self.state == "sleep" and tag == "sleeping") or hastag(self, tag)
   end
   local add = inst.AddComponent
+  function inst:SetBrain(brain) self.brain, self.brainfn = brain, brain end
   function inst:AddComponent(name)
-    if name == "kingguard" or name == "libelluscastlesleep" then
+    if name == "kingguard" or name == "libelluscastlesleep" or name == "libelluscelebration"
+      or name == "libelluspigcelebrant" then
       self.components[name] = require("components/"..name)(self)
+      return self.components[name]
+    elseif name == "petleash" then
+      self.components[name] = require("components/gamepetleash")(self)
+      return self.components[name]
+    elseif name == "amphibiouscreature" and package.preload["components/gameamphibiouscreature"] ~= nil then
+      self.components[name] = require("components/gameamphibiouscreature")(self)
       return self.components[name]
     end
     local c = add(self, name)
     if name == "combat" then
       function c:SetRetargetFunction(period, fn) self.retarget, self.targetfn = fn, fn end
+    elseif name == "amphibiouscreature" then
+      function c:SetBanks(land, water) self.land_bank, self.ocean_bank = land, water end
+      function c:SetEnterWaterFn(fn) self.enterwaterfn = fn end
+      function c:SetExitWaterFn(fn) self.exitwaterfn = fn end
+    elseif name == "follower" then
+      function c:GetLeader() return self.leader end
+      c.KeepLeaderOnAttacked = noop
+    elseif name == "leader" then
+      function c:AddFollower(pet) pet.components.follower:SetLeader(inst) end
     elseif name == "maprevealable" then
       c.SetIconPrefab, c.SetIcon, c.SetIconPriority, c.SetOnIconCreatedFn = noop, noop, noop, noop
       function c:AddRevealSource(source) self.source = source end
@@ -65,6 +128,26 @@ H.factories.king_lupa = royal_lupa.fn
 H.factories.rex = require("prefabs/rex").fn
 H.factories.king_castle = require("prefabs/king_castle").fn
 H.factories.king_scene_light = require("prefabs/king_scene_light").fn
+H.factories.pigking = function()
+  local inst = Entity()
+  inst.sg.mem = {}
+  function inst:IsMinigameActive() return false end
+  require("rexanimalium").Setup(inst)
+  return inst
+end
+Prefabs.critter_puppy = {fn = function()
+  local inst = Entity()
+  inst.AnimState:SetBank("pupington")
+  inst.AnimState:SetBuild("pupington_build")
+  inst:AddTag("critter")
+  inst:AddTag("companion")
+  inst:AddComponent("follower")
+  inst:AddComponent("locomotor")
+  inst:SetStateGraph("SGcritter_puppy")
+  return inst
+end}
+local puppy, puppyvoice = dofile("scripts/prefabs/publilius.lua")
+H.factories.publilius, H.factories.publilius_voice = puppy.fn, puppyvoice.fn
 for _, name in ipairs({"dragonfly", "deerclops", "bearger", "beequeen"}) do
   Prefabs[name] = {fn = function()
     local inst = Entity()
@@ -134,10 +217,15 @@ local function Player(userid)
   inst:AddComponent("health"):SetMaxHealth(150)
   inst:AddComponent("combat")
   inst:AddComponent("locomotor")
+  inst:AddComponent("leader")
+  inst:AddComponent("petleash")
+  inst:ListenForEvent("emote", function(_, data) inst.last_emote = data end)
   inst.components.libellusprogress = Progress(inst)
   table.insert(AllPlayers, inst)
   return inst, inst.components.libellusprogress
 end
+local toast = {anim = {"emote_pre_toast", "emote_loop_toast"}, mounted = true, loop = true}
+function GetCommonEmotes() return {toast = {data = toast}} end
 local function Encounter()
   local player, progress = Player()
   -- Keep the rest of the story's encounters outside this focused world.
@@ -146,6 +234,7 @@ local function Encounter()
   local castle = progress:EnsureCastle()
   player.position = Vector3(0, 0, 0)
   local publius = Entity()
+  publius.prefab = "publius"
   publius:AddTag("character")
   publius:AddComponent("talker")
   publius:AddComponent("follower")
@@ -549,4 +638,372 @@ test("castle giants remain after native offscreen and winter cleanup", function(
   assert(dragon:IsValid())
   equal(dragon.sleeptask, nil)
 end)
-print(count.." lunar castle tests passed")
+local function Pig(name, x, z)
+  local pig = Entity()
+  pig.prefab = name or "pigman"
+  pig.position = Vector3(x or 0, 0, z or 0)
+  pig:AddComponent("talker")
+  pig:AddComponent("health"):SetMaxHealth(100)
+  pig:AddComponent("combat")
+  pig:AddComponent("locomotor")
+  pig:SetBrain(package.loaded["brains/pigbrain"])
+  return pig
+end
+local function Closing()
+  local player, progress, castle = Encounter()
+  local king = SpawnPrefab("pigking")
+  king.position = Vector3(100, 0, 100)
+  progress._rex = king
+  progress:SetProgress("ch6", DIALOG.CH6_SEP[6])
+  return player, progress, castle, king
+end
+local function CountSpeech(speaker, line)
+  local count, time = 0, nil
+  for _, speech in ipairs(H.speeches()) do
+    if speech.speaker == speaker and speech.content == DIALOG.ch6[line].content then
+      count, time = count+1, speech.at
+    end
+  end
+  return count, time
+end
+
+test("Lupa follows after the king dies, but line thirteen waits for her to reach the player", function()
+  local player, progress, castle = Encounter()
+  progress:SetProgress("ch6", DIALOG.CH6_SEP[4])
+  progress:DialogLoop(player)
+  assert(GiftBell(player, castle))
+  local lupa = castle._lupa
+  lupa.position = Vector3(HELPERS.LUPA_MEETING_DISTANCE+10, 0, 0)
+  castle._king.components.health:DoDelta(-castle._king.components.health.maxhealth)
+  equal(lupa.components.follower:GetLeader(), player)
+  equal(lupa.components.kingguard.followuserid, player.userid)
+  equal(lupa.components.kingguard.escaping, nil)
+  equal(lupa.persists, false)
+  advance(HELPERS.DIALOG_INTERVAL+3)
+  equal(CountSpeech(lupa, DIALOG.CH6_SEP[5]), 0)
+  equal(progress.dialog, DIALOG.CH6_SEP[5])
+  lupa.position = player:GetPosition()
+  advance(HELPERS.CHECK_PROGRESS_INTERVAL)
+  equal(CountSpeech(lupa, DIALOG.CH6_SEP[5]), 1)
+  advance(HELPERS.DIALOG_INTERVAL+1)
+  equal(progress.dialog, DIALOG.CH6_SEP[6])
+end)
+
+test("rescued Lupa saves with the player, migrates, and is not duplicated by the castle", function()
+  local player, progress, castle = Encounter()
+  castle._betrayeruserid = player.userid
+  castle._king.components.health:DoDelta(-castle._king.components.health.maxhealth)
+  local lupa = castle._lupa
+  local saved = progress:OnSave()
+  assert(saved.king_defeated and saved.lupa ~= nil)
+  local castledata = {}
+  castle:OnSave(castledata)
+  equal(castledata._lupa, nil)
+  progress:OnRemoveEntity()
+  local arriving, restored = Player(player.userid)
+  arriving.migrationpets = {}
+  restored:OnLoad(saved)
+  local adopted = restored:GetLupa()
+  assert(adopted ~= nil and adopted ~= lupa)
+  equal(adopted.components.follower:GetLeader(), arriving)
+  equal(adopted.persists, false)
+  equal(arriving.migrationpets[1], adopted)
+  equal(CountPrefab("king_lupa"), 1)
+end)
+
+test("reunion creates no puppy before line fourteen ends, then cheers and puppy speech start together", function()
+  local player, progress, _, king = Closing()
+  local pig, distant = Pig("pigman", 30, 20), Pig("pigguard", -300, -300)
+  progress:DialogLoop(player)
+  advance(2)
+  equal(#H.speeches(), 0)
+  equal(CountPrefab("publilius"), 0)
+  player.position = king:GetPosition()
+  advance(HELPERS.CHECK_PROGRESS_INTERVAL)
+  equal(CountSpeech(king._libellus_rex_voice, DIALOG.CH6_SEP[6]), 1)
+  equal(CountPrefab("publilius"), 0)
+  equal(king.components.libelluscelebration.untiltime, nil)
+  advance(HELPERS.DIALOG_INTERVAL-.1)
+  equal(CountPrefab("publilius"), 0)
+  advance(.2)
+  equal(CountPrefab("publilius"), 1)
+  local pet = progress:EnsurePublilius()
+  equal(pet.AnimState.bank, "pupington")
+  equal(pet.graph, "SGcritter_puppy")
+  equal(pet.components.follower:GetLeader(), player)
+  equal(pet.persists, false)
+  equal(pet.displaynamefn(), "Publilius")
+  equal(player.components.petleash:GetNumPetsForPrefab("publilius"), 1)
+  local count, time = CountSpeech(pet._libellus_voice, DIALOG.CH6_SEP[8])
+  equal(count, 1)
+  local pigcount, pigtime = CountSpeech(pig, DIALOG.CH6_SEP[7])
+  equal(pigcount, 1)
+  equal(time, pigtime)
+  equal(select(2, CountSpeech(distant, DIALOG.CH6_SEP[7])), time)
+  equal(pig.sg.state, "run_start")
+  equal(pig.brain, package.loaded["brains/celebrationpigbrain"])
+  equal(CountSpeech(player, DIALOG.CH6_SEP[9]), 0)
+  advance(HELPERS.DIALOG_INTERVAL+1)
+  equal(CountSpeech(player, DIALOG.CH6_SEP[9]), 1)
+  equal(player.last_emote, toast)
+  advance(HELPERS.DIALOG_INTERVAL+1)
+  equal(progress.dialog, DIALOG.CH6_SEP[9]+1)
+  equal(CountSpeech(pet._libellus_voice, DIALOG.CH6_SEP[8]), 1)
+  advance(time+HELPERS.CLOSING_DURATION-GetTime()+1)
+  assert(CountSpeech(pig, DIALOG.CH6_SEP[7]) > 1)
+  equal(king.components.libelluscelebration.untiltime, nil)
+  equal(pig.position.x, 30)
+  equal(pig.position.z, 20)
+  equal(distant.position.x, -300)
+  equal(distant.position.z, -300)
+  equal(pig.brain, package.loaded["brains/pigbrain"])
+  equal(pig.components.libelluspigcelebrant, nil)
+  local finished = #H.speeches()
+  advance(HELPERS.CLOSING_CHEER_INTERVAL)
+  equal(#H.speeches(), finished)
+end)
+
+test("a refused or interrupted line fourteen cannot grant Publilius", function()
+  local player, progress, _, king = Closing()
+  player.position = king:GetPosition()
+  king._libellus_rex_voice.components.talker.refuse = true
+  progress:DialogLoop(player)
+  advance(HELPERS.DIALOG_INTERVAL+1)
+  equal(progress.dialog, DIALOG.CH6_SEP[6])
+  equal(progress._closing_ready, nil)
+  equal(CountPrefab("publilius"), 0)
+  king._libellus_rex_voice.components.talker.refuse = false
+  advance(HELPERS.BUSY_INTERVAL)
+  equal(progress.dialog, DIALOG.CH6_SEP[7])
+  progress:SetProgress("ch5", DIALOG.CH5_SEP[3])
+  player.position = king:GetPosition()
+  advance(HELPERS.DIALOG_INTERVAL+1)
+  equal(CountPrefab("publilius"), 0)
+  equal(king.components.libelluscelebration.untiltime, nil)
+end)
+
+test("native pet leash retains an existing pet and never grants a second Publilius", function()
+  local player, progress, _, king = Closing()
+  H.factories.critter_puppy = Prefabs.critter_puppy.fn
+  local original = player.components.petleash:SpawnPetAt(0, 0, 0, "critter_puppy")
+  assert(original ~= nil)
+  player.position = king:GetPosition()
+  progress:DialogLoop(player)
+  advance(HELPERS.DIALOG_INTERVAL+1)
+  local pet = assert(progress:EnsurePublilius())
+  equal(player.components.petleash:GetMaxPets(), 1)
+  equal(original.components.follower:GetLeader(), player)
+  equal(progress:EnsurePublilius(), pet)
+  equal(CountPrefab("publilius"), 1)
+  local records = player.components.petleash:OnSave()
+  local saved = progress:OnSave()
+  progress:OnRemoveEntity()
+  player.components.petleash:OnRemoveEntity()
+  player:Remove()
+  local arriving, restored = Player(player.userid)
+  arriving.migrationpets = {}
+  restored:OnLoad(saved)
+  arriving.components.petleash:OnLoad(records)
+  local adopted = assert(restored:EnsurePublilius())
+  equal(CountPrefab("publilius"), 1)
+  equal(adopted.components.follower:GetLeader(), arriving)
+  equal(arriving.components.petleash:GetNumPetsForPrefab("publilius"), 1)
+  equal(restored._publilius_spoken, true)
+  equal(#arriving.migrationpets, 3) -- Publius and the two native pets.
+end)
+
+test("a saved one-minute celebration resumes its remaining time and restores each pig's home", function()
+  local king = SpawnPrefab("pigking")
+  king.position = Vector3(100, 0, 100)
+  local pig = Pig("pigman", 20, 30)
+  king.components.libelluscelebration:Start()
+  advance(HELPERS.CLOSING_DURATION/2)
+  local saved = king.components.libelluscelebration:OnSave()
+  local pigsave = pig.components.libelluspigcelebrant:OnSave()
+  equal(saved.remaining, HELPERS.CLOSING_DURATION/2)
+  king:Remove()
+  pig:Remove()
+  local loadedking, loadedpig = SpawnPrefab("pigking"), Pig("pigman")
+  loadedking.position = Vector3(100, 0, 100)
+  loadedpig.position = pig:GetPosition()
+  loadedpig:AddComponent("libelluspigcelebrant"):OnLoad(pigsave)
+  loadedking.components.libelluscelebration:OnLoad(saved)
+  loadedking.components.libelluscelebration:LoadPostPass({[pig.GUID] = {entity = loadedpig}}, saved)
+  advance(saved.remaining-.1)
+  assert(loadedking.components.libelluscelebration.untiltime ~= nil)
+  equal(loadedpig.brain, package.loaded["brains/celebrationpigbrain"])
+  advance(.4)
+  equal(loadedking.components.libelluscelebration.untiltime, nil)
+  equal(loadedpig.brain, package.loaded["brains/pigbrain"])
+  equal(loadedpig.position.x, 20)
+  equal(loadedpig.position.z, 30)
+end)
+
+test("pig movement alternates around Rex and rescued Lupa's brain runs toward her leader", function()
+  local savedbrain, savednode, savedbt, savedrunning = Brain, BehaviourNode, BT, RUNNING
+  Brain = {_ctor = function(self, inst) self.inst = inst end}
+  BehaviourNode = {_ctor = noop, Sleep = noop}
+  BT = function(_, node) return {root = node} end
+  RUNNING = "RUNNING"
+  local oldoffset = FindWalkableOffset
+  function FindWalkableOffset(_, angle, radius) return Vector3(math.cos(angle)*radius, 0, math.sin(angle)*radius) end
+  local king = SpawnPrefab("pigking")
+  king.position = Vector3(100, 0, 100)
+  local pig = Pig()
+  pig:AddComponent("libelluspigcelebrant"):Join(king)
+  function pig.components.locomotor:GoToPoint(point, _, run) self.destination, self.run = point, run end
+  local brain = dofile("scripts/brains/celebrationpigbrain.lua")(pig)
+  brain:OnStart()
+  brain.bt.root:Visit()
+  local first = pig.components.locomotor.destination
+  equal(pig.components.locomotor.run, true)
+  advance(HELPERS.CLOSING_PIG_TURN_INTERVAL)
+  brain.bt.root:Visit()
+  local second = pig.components.locomotor.destination
+  assert((first.x-king.position.x)*(second.x-king.position.x)
+    +(first.z-king.position.z)*(second.z-king.position.z) < 0)
+  local player, progress, castle = Encounter()
+  castle._betrayeruserid = player.userid
+  castle._king.components.health:DoDelta(-castle._king.components.health.maxhealth)
+  local lupa = castle._lupa
+  lupa.position = Vector3(HELPERS.LUPA_FOLLOW_DISTANCE+10, 0, 0)
+  function lupa.components.locomotor:GoToPoint(point, _, run) self.destination, self.run = point, run end
+  local follow = dofile("scripts/brains/kingcourtbrain.lua")(lupa)
+  follow:OnStart()
+  follow.bt.root:Visit()
+  equal(lupa.components.locomotor.destination.x, player.position.x)
+  equal(lupa.components.locomotor.run, true)
+  lupa.position = player:GetPosition()
+  follow.bt.root:Visit()
+  equal(lupa.components.locomotor.stopped, true)
+  FindWalkableOffset = oldoffset
+  Brain, BehaviourNode, BT, RUNNING = savedbrain, savednode, savedbt, savedrunning
+end)
+if package.preload.gamehoundgraph ~= nil then
+  -- Reproduce the reported crash with the installed game's actual SGhound,
+  -- shared amphibious hop states, and amphibiouscreature component.
+  function State(data) return data end
+  function EventHandler(event, fn) return {event = event, fn = fn} end
+  function ActionHandler(action, state) return {action = action, state = state} end
+  function TimeEvent(time, fn) return {time = time, fn = fn} end
+  function FrameEvent(frame, fn) return TimeEvent(frame*FRAMES, fn) end
+  function SoundFrameEvent(frame, sound) return FrameEvent(frame, function(inst) inst.SoundEmitter:PlaySound(sound) end) end
+  function StateGraph(name, states, events) return {name = name, states = states, events = events} end
+  function JoinArrays(a, b)
+    local result = {}
+    for _, value in ipairs(a) do table.insert(result, value) end
+    for _, value in ipairs(b) do table.insert(result, value) end
+    return result
+  end
+  function IsEntityDead(inst) return inst.components.health ~= nil and inst.components.health:IsDead() end
+  COLLISION = {LIMITS = 1}
+  TUNING.HOUND_SWIM_SPEED = 7
+  require("gamecommonstates")
+  package.loaded["stategraphs/commonstates"] = true
+  local graph = require("gamehoundgraph")
+  local states = {}
+  for _, state in ipairs(graph.states) do states[state.name] = state end
+  local function BoatLupa()
+    TheWorld.has_ocean = true
+    local lupa = SpawnPrefab("king_lupa")
+    local player = Player()
+    lupa.components.kingguard:FollowPlayer(player)
+    lupa.Physics.ClearCollidesWith, lupa.Physics.CollidesWith = noop, noop
+    function lupa.AnimState:IsCurrentAnimation(name) return self.animation == name end
+    function lupa.AnimState:AnimDone() return true end
+    function lupa.components.locomotor:RunForward() self.running = true end
+    lupa.components.locomotor.hop_distance = 6
+    local embarker = lupa.components.embarker
+    function embarker:HasDestination() return self.destination ~= nil end
+    function embarker:StartMoving() self.moving = true end
+    function embarker:Embark()
+      lupa.platform = self.destination ~= "land" and self.destination or nil
+      self.destination, self.moving = nil, false
+    end
+    function embarker:Cancel() self.destination, self.moving = nil, false end
+    lupa._test_stategraph = graph
+    lupa.sg = {statemem = {}, mem = {}}
+    function lupa.sg:HasStateTag(tag)
+      for _, value in ipairs(self.currentstate.tags or {}) do if value == tag then return true end end
+      return false
+    end
+    function lupa.sg:HasAnyStateTag(...)
+      for _, tag in ipairs({...}) do if self:HasStateTag(tag) then return true end end
+      return false
+    end
+    function lupa.sg:SetTimeout(value) self.timeout = value end
+    function lupa.sg:GoToState(name, data)
+      if self.currentstate ~= nil and self.currentstate.onexit ~= nil then self.currentstate.onexit(lupa) end
+      self.currentstate, self.statemem = assert(states[name]), {}
+      if self.currentstate.onenter ~= nil then self.currentstate.onenter(lupa, data) end
+    end
+    lupa.sg:GoToState("idle")
+    return lupa, player
+  end
+  local function FinishHop(lupa)
+    -- The first event is the exact commonstates.lua:1087 failure in the screenshot.
+    lupa:PushEvent("done_embark_movement")
+    lupa.sg.currentstate.onupdate(lupa, 0)
+    equal(lupa.sg.currentstate.name, "hop_pst")
+    lupa:PushEvent("animover")
+    equal(lupa.sg.currentstate.name, "idle")
+  end
+  test("native hound boarding and disembarking events keep Lupa on deck or on land without crashing", function()
+    local lupa, player = BoatLupa()
+    local boat = SpawnPrefab("boat")
+    local embarker = lupa.components.embarker
+    assert(lupa.components.amphibiouscreature ~= nil)
+    equal(embarker.antic, true)
+    equal(embarker.embark_speed, HELPERS.LUPA_FOLLOW_SPEED)
+    embarker.destination = boat
+    lupa:PushEvent("onhop")
+    equal(lupa.sg.currentstate.name, "hop_pre")
+    FinishHop(lupa)
+    equal(lupa:GetCurrentPlatform(), boat)
+    equal(lupa:HasTag("swimming"), false)
+    equal(lupa.AnimState.bank, "hound")
+    embarker.destination = "land"
+    lupa:PushEvent("onhop")
+    FinishHop(lupa)
+    equal(lupa:GetCurrentPlatform(), nil)
+    equal(lupa.components.follower:GetLeader(), player)
+    equal(lupa.components.locomotor.runspeed, HELPERS.LUPA_FOLLOW_SPEED)
+  end)
+  test("native water-to-boat hop restores Lupa's land bank, speed, and hop distance", function()
+    local lupa = BoatLupa()
+    local amphibious = lupa.components.amphibiouscreature
+    amphibious:OnEnterOcean()
+    equal(lupa.AnimState.bank, "hound_water")
+    equal(lupa:HasTag("swimming"), true)
+    equal(lupa.components.locomotor.runspeed, TUNING.HOUND_SWIM_SPEED)
+    equal(lupa.components.locomotor.hop_distance, HELPERS.LUPA_SWIM_HOP_DISTANCE)
+    local boat = SpawnPrefab("boat")
+    lupa.components.embarker.destination = boat
+    lupa:PushEvent("onhop")
+    equal(lupa.sg.currentstate.name, "hop_antic")
+    lupa.sg.currentstate.ontimeout(lupa)
+    FinishHop(lupa)
+    equal(lupa:GetCurrentPlatform(), boat)
+    equal(amphibious.in_water, false)
+    equal(lupa.AnimState.bank, "hound")
+    equal(lupa.components.locomotor.runspeed, HELPERS.LUPA_FOLLOW_SPEED)
+    equal(lupa.components.locomotor.hop_distance, 6)
+  end)
+  test("native hop animation and water-landing events also have their required amphibious component", function()
+    local lupa = BoatLupa()
+    local boat = SpawnPrefab("boat")
+    lupa.components.embarker.destination = boat
+    lupa:PushEvent("onhop")
+    lupa:PushEvent("animover")
+    equal(lupa.AnimState.animation, "jump_loop")
+    FinishHop(lupa)
+    lupa.sg:GoToState("hop_pst", true)
+    equal(lupa.components.amphibiouscreature.in_water, true)
+    equal(lupa.AnimState.bank, "hound_water")
+    lupa:PushEvent("animover")
+    lupa.sg:GoToState("hop_pst", false)
+    equal(lupa.components.amphibiouscreature.in_water, false)
+    equal(lupa.AnimState.bank, "hound")
+  end)
+end
+print(count.." lunar castle and closing-scene tests passed")

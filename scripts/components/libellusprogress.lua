@@ -7,6 +7,11 @@ local LibellusProgress = Class(function(self, inst)
   self.chapter = "ch1"
   self.dialog = 1 -- The next line to speak.
   self._progress_revision = 0 -- Runtime only; invalidates stale progress updates.
+  -- Register the dedicated slot before native petleash restores its pets, so
+  -- Publilius never consumes or displaces the player's ordinary critter slot.
+  if inst.components.petleash ~= nil then
+    inst.components.petleash:SetMaxPetsForPrefab("publilius", HELPERS.PUBLILIUS_PET_LIMIT)
+  end
 end)
 
 function LibellusProgress:GetProgress()
@@ -44,6 +49,11 @@ function LibellusProgress:OnSave()
     casa_cleared = self._casa_cleared,
     rex_panflute_received = self._rex_panflute_received,
     rex_bell_received = self._rex_bell_received,
+    king_defeated = self._king_defeated,
+    closing_ready = self._closing_ready,
+    closing_started = self._closing_started,
+    publilius_received = self._publilius_received,
+    publilius_spoken = self._publilius_spoken,
     ch6_trade_ready = self._ch6_trade_ready,
     ch6_pending = self._ch6_pending ~= nil and {
       line = self._ch6_pending.line,
@@ -63,6 +73,12 @@ function LibellusProgress:OnSave()
     data.publius = publius:GetSaveRecord()
     publius.temp_save_platform_pos = nil
   end
+  local lupa = self._lupa
+  if lupa ~= nil and lupa:IsValid() and lupa.persists == false then
+    lupa.temp_save_platform_pos = true
+    data.lupa = lupa:GetSaveRecord()
+    lupa.temp_save_platform_pos = nil
+  end
   return data
 end
 
@@ -71,6 +87,9 @@ function LibellusProgress:OnLoad(data)
     self:SetProgress(data.chapter, data.dialog)
     self._casa_cleared = data.casa_cleared
     self._rex_panflute_received, self._rex_bell_received = data.rex_panflute_received, data.rex_bell_received
+    self._king_defeated, self._closing_ready = data.king_defeated, data.closing_ready
+    self._closing_started, self._publilius_received = data.closing_started, data.publilius_received
+    self._publilius_spoken = data.publilius_spoken
     if data.ch6_trade_ready ~= nil then self._ch6_trade_ready = data.ch6_trade_ready end
     if data.ch6_pending ~= nil then
       self._ch6_pending = {line = data.ch6_pending.line,
@@ -97,6 +116,15 @@ function LibellusProgress:OnLoad(data)
         end
       end
     end
+    if data.lupa ~= nil then
+      data.lupa.is_snapshot_save_record = self.inst.is_snapshot_user_session
+      self._lupa = SpawnSaveRecord(data.lupa)
+      data.lupa.is_snapshot_save_record = nil
+      if self._lupa ~= nil then
+        self:AdoptLupa(self._lupa)
+        if self.inst.migrationpets ~= nil then table.insert(self.inst.migrationpets, self._lupa) end
+      end
+    end
   end
 end
 
@@ -106,6 +134,63 @@ function LibellusProgress:OnRemoveEntity()
   if publius ~= nil and publius:IsValid() and publius.persists == false then
     publius:Remove()
   end
+  if self._lupa ~= nil and self._lupa:IsValid() and self._lupa.persists == false then self._lupa:Remove() end
+end
+
+function LibellusProgress:GetLupa()
+  if self._lupa ~= nil and self._lupa:IsValid() then return self._lupa end
+  local castle = self._castle
+  local lupa = castle ~= nil and castle:IsValid() and castle._lupa or nil
+  return lupa ~= nil and lupa:IsValid() and lupa or nil
+end
+
+function LibellusProgress:AdoptLupa(lupa)
+  if lupa.components.health:IsDead() then return end
+  self._lupa = lupa
+  if lupa.components.follower:GetLeader() ~= self.inst
+    or lupa.components.kingguard.followuserid ~= self.inst.userid then
+    lupa.components.kingguard:FollowPlayer(self.inst)
+  end
+  lupa.persists = false
+end
+
+function LibellusProgress:EnsureRescuedLupa()
+  local castle = self._castle
+  if castle ~= nil and castle:IsValid() and castle._king_dead and castle._betrayeruserid == self.inst.userid then
+    self._king_defeated = true
+  end
+  if not self._king_defeated then return end
+  local lupa = self:GetLupa()
+  if lupa == nil then
+    for _, ent in pairs(Ents) do
+      if ent.prefab == "king_lupa" and ent:IsValid() and ent._libellus_owneruserid == self.inst.userid then
+        lupa = ent
+        break
+      end
+    end
+  end
+  if lupa ~= nil then self:AdoptLupa(lupa) end
+end
+
+function LibellusProgress:EnsurePublilius()
+  -- The puppy is a reward of the completed speech, never of merely entering
+  -- the Pig King's range or starting line fourteen.
+  if not self._closing_ready then return end
+  local leash = self.inst.components.petleash
+  if leash == nil then return end
+  for pet in pairs(leash:GetPets()) do
+    if pet.prefab == "publilius" and pet:IsValid() then return pet end
+  end
+  if self._publilius_received then return end
+  leash:SetMaxPetsForPrefab("publilius", HELPERS.PUBLILIUS_PET_LIMIT)
+  local point = HELPERS.FindClosingPoint(self.inst:GetPosition(), math.random()*2*math.pi, HELPERS.CLOSING_PET_OFFSET)
+  if point == nil then return end
+  local pet = leash:SpawnPetAt(point.x, 0, point.z, "publilius")
+  if pet ~= nil then
+    pet._libellus_owneruserid = self.inst.userid
+    self._publilius_received = true
+  end
+  return pet
 end
 
 function LibellusProgress:EnsurePublius()
@@ -369,6 +454,7 @@ function LibellusProgress:DialogLoop(inst)
     self:EnsureFarm()
     self:EnsureNavis()
     self:EnsureCastle()
+    self:EnsureRescuedLupa()
     local grove = self:EnsurePasser()
     if grove ~= nil and grove._released then self:OnPasserFreed(grove) end
     if self._casa_cleared and self._casa ~= nil and self._casa:IsValid() then
@@ -439,8 +525,9 @@ function LibellusProgress:DialogLoop(inst)
     if dialog <= DIALOG.CH5_SEP[1] then say_func = self.SayChapterFiveGifts
     elseif dialog <= DIALOG.CH5_SEP[2] then say_func = self.SayChapterFiveSenex
     elseif dialog == DIALOG.CH5_SEP[3] then say_func = self.SayChapterSixApproach end
-  elseif chapter == "ch6" and dialog <= DIALOG.CH6_SEP[5] then
-    say_func = self.SayChapterSix
+  elseif chapter == "ch6" then
+    if dialog <= DIALOG.CH6_SEP[5] then say_func = self.SayChapterSix
+    elseif dialog <= DIALOG.CH6_SEP[9] then say_func = self.SayChapterSixClosing end
   end
   local delay = say_func(self, inst, chapter, dialog, revision)
   self:ScheduleDialogLoop(delay)
@@ -461,9 +548,9 @@ end
 
 function LibellusProgress:UpdateChapterSixScene()
   local castle = self._castle
-  if castle == nil or not castle:IsValid() then return false end
+  local has_castle = castle ~= nil and castle:IsValid()
   if self.inst.loadingprotection or self.inst:HasTag("playerghost") then
-    castle:EndNight(self.inst)
+    if has_castle then castle:EndNight(self.inst) end
     return true
   end
   local pending = self._ch6_pending
@@ -473,17 +560,24 @@ function LibellusProgress:UpdateChapterSixScene()
     self._ch6_pending = nil
     if pending.line == DIALOG.CH6_SEP[1] and self.chapter == "ch6"
       and self.dialog == DIALOG.CH6_SEP[1] + 1 then
-      castle:BeginNight(self.inst)
+      if has_castle then castle:BeginNight(self.inst) end
     elseif pending.line == DIALOG.CH6_SEP[2] then
-      castle:EndNight(self.inst)
+      if has_castle then castle:EndNight(self.inst) end
     elseif pending.line == DIALOG.CH6_SEP[3] and self.chapter == "ch6"
       and self.dialog == DIALOG.CH6_SEP[4] then
       self._ch6_trade_ready = true
     elseif pending.line == DIALOG.CH6_SEP[5] and self.chapter == "ch6"
       and self.dialog == DIALOG.CH6_SEP[5] then
-      self:SetProgress("ch6", DIALOG.CH6_SEP[5] + 1)
+      self:SetProgress("ch6", DIALOG.CH6_SEP[6])
+    elseif pending.line == DIALOG.CH6_SEP[6] and self.chapter == "ch6"
+      and self.dialog == DIALOG.CH6_SEP[7] then
+      self._closing_ready = true
+    elseif pending.line == DIALOG.CH6_SEP[9] and self.chapter == "ch6"
+      and self.dialog == DIALOG.CH6_SEP[9] then
+      self:SetProgress("ch6", DIALOG.CH6_SEP[9]+1)
     end
   end
+  if not has_castle then return false end
   if self.chapter == "ch6" and self.dialog > DIALOG.CH6_SEP[1] and self.dialog <= DIALOG.CH6_SEP[2] then
     if not castle:BeginNight(self.inst) then return true end
   elseif self.chapter ~= "ch6" or self.dialog <= DIALOG.CH6_SEP[1] or self.dialog > DIALOG.CH6_SEP[2] then
@@ -506,21 +600,28 @@ function LibellusProgress:OnKingBellReceived(castle)
 end
 
 function LibellusProgress:OnHumanKingDeath(castle)
-  if self._castle == castle and self.chapter == "ch6" and self.dialog == DIALOG.CH6_SEP[5] then
+  if castle._betrayeruserid ~= self.inst.userid then return end
+  self._king_defeated = true
+  if castle._lupa ~= nil and castle._lupa:IsValid() then self:AdoptLupa(castle._lupa) end
+  if self.chapter == "ch6" and self.dialog == DIALOG.CH6_SEP[5] then
     self:ScheduleDialogLoop(HELPERS.CHECK_PROGRESS_INTERVAL)
   end
 end
 
 function LibellusProgress:SayChapterSix(inst, chapter, dialog, revision)
   local castle = self._castle
-  if castle == nil or not castle:IsValid() then return HELPERS.CHECK_PROGRESS_INTERVAL end
-  local king, lupa = castle._king, castle._lupa
+  local has_castle = castle ~= nil and castle:IsValid()
+  local king, lupa = has_castle and castle._king or nil, self:GetLupa()
   local target = dialog <= DIALOG.CH6_SEP[1] and castle or (dialog <= DIALOG.CH6_SEP[2] and lupa or king)
   if dialog == DIALOG.CH6_SEP[4] then return HELPERS.CHECK_PROGRESS_INTERVAL end -- Gift event only.
   if dialog == DIALOG.CH6_SEP[5] then
-    if not castle._betrayed or not castle._king_dead or castle._betrayeruserid ~= inst.userid then
+    if not self._king_defeated or lupa == nil or lupa.components.health:IsDead()
+      or not inst:IsNear(lupa, HELPERS.LUPA_MEETING_DISTANCE) then
       return HELPERS.CHECK_PROGRESS_INTERVAL
     end
+    target = inst
+  elseif not has_castle then
+    return HELPERS.CHECK_PROGRESS_INTERVAL
   elseif dialog == 1 or dialog == DIALOG.CH6_SEP[1] + 1 or dialog == DIALOG.CH6_SEP[2] + 1 then
     if target == nil or not target:IsValid()
       or not inst:IsNear(target, dialog == 1 and HELPERS.CASTLE_SEE_DISTANCE or HELPERS.KING_SEE_DISTANCE)
@@ -539,6 +640,49 @@ function LibellusProgress:SayChapterSix(inst, chapter, dialog, revision)
     function()
       if dialog == DIALOG.CH6_SEP[1] or dialog == DIALOG.CH6_SEP[2]
         or dialog == DIALOG.CH6_SEP[3] or dialog == DIALOG.CH6_SEP[5] then self:SetChapterSixPending(dialog) end
+      return HELPERS.DIALOG_INTERVAL
+    end)
+end
+
+function LibellusProgress:SayChapterSixClosing(inst, chapter, dialog, revision)
+  if dialog == DIALOG.CH6_SEP[6] then
+    local king = self:EnsureRex()
+    if king == nil or not inst:IsNear(king, HELPERS.REX_MEETING_DISTANCE) then return HELPERS.CHECK_PROGRESS_INTERVAL end
+    local voice = king._libellus_rex_voice
+    if voice == nil or not voice:IsValid() or IsBusy(voice) then return HELPERS.BUSY_INTERVAL end
+    return self:Say(voice, chapter, dialog, revision, DIALOG.ch6[dialog].content,
+      function() return chapter, DIALOG.CH6_SEP[7] end,
+      function() self:SetChapterSixPending(DIALOG.CH6_SEP[6]); return HELPERS.DIALOG_INTERVAL end)
+  elseif dialog <= DIALOG.CH6_SEP[8] then
+    if not self._closing_ready then return HELPERS.CHECK_PROGRESS_INTERVAL end
+    if self._publilius_spoken then
+      self:SetProgress(chapter, DIALOG.CH6_SEP[9], revision)
+      return HELPERS.CHECK_PROGRESS_INTERVAL
+    end
+    local king, pet = self:EnsureRex(), self:EnsurePublilius()
+    local voice = pet ~= nil and pet._libellus_voice or nil
+    if king == nil or voice == nil or not voice:IsValid() or IsBusy(voice) then return HELPERS.BUSY_INTERVAL end
+    return self:Say(voice, chapter, dialog, revision, DIALOG.ch6[DIALOG.CH6_SEP[8]].content,
+      function() return chapter, DIALOG.CH6_SEP[9] end,
+      function()
+        self._publilius_spoken = true
+        if not self._closing_started then
+          king.components.libelluscelebration:Start()
+          self._closing_started = true
+        end
+        self:SetChapterSixPending(DIALOG.CH6_SEP[8])
+        return HELPERS.DIALOG_INTERVAL
+      end)
+  end
+  if IsBusy(inst) or inst:HasTag("beaver") or inst:HasTag("weremoose") or inst:HasTag("weregoose")
+    or (inst.components.inventory ~= nil and inst.components.inventory:IsHeavyLifting()) then
+    return HELPERS.BUSY_INTERVAL
+  end
+  return self:Say(inst, chapter, dialog, revision, DIALOG.ch6[DIALOG.CH6_SEP[9]].content,
+    function(d) return chapter, d end,
+    function()
+      inst:PushEvent("emote", GetCommonEmotes().toast.data)
+      self:SetChapterSixPending(DIALOG.CH6_SEP[9])
       return HELPERS.DIALOG_INTERVAL
     end)
 end

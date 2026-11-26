@@ -4,6 +4,7 @@ local Rex = {}
 function Rex.Setup(inst)
   inst.displaynamefn = function() return "Rex animalium" end
   if not TheWorld.ismastersim then return end
+  if inst.components.libelluscelebration == nil then inst:AddComponent("libelluscelebration") end
   if inst._libellus_rex_voice ~= nil and inst._libellus_rex_voice:IsValid() then return end
   -- A replicated child owns the talker, constructed before its SetPristine.
   -- The native king keeps his trader, stategraph, sleep, and minigame logic.

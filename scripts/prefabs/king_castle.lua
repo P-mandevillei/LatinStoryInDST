@@ -218,7 +218,10 @@ local function OnSave(inst, data)
   local refs = {}
   for _, field in ipairs({"_king", "_lupa"}) do
     local ent = inst[field]
-    if ent ~= nil and ent:IsValid() then data[field] = ent.GUID; table.insert(refs, ent.GUID) end
+    if ent ~= nil and ent:IsValid() and ent.persists ~= false then
+      data[field] = ent.GUID
+      table.insert(refs, ent.GUID)
+    end
   end
   for _, field in ipairs({"_guards", "_walls"}) do
     data[field] = {}
