@@ -67,13 +67,34 @@ local DIALOG = {
     {name="Octavia", content="Si auxilium nobis dederis, contra regem hominum tecum pugnabimus."},
     {name="Rex animalium", content="Bene. Dona divitia vobis do."},
   },
-  ch5 = {}
+  ch5 = {
+    {name="Rex animalium", content="Dona multa, quae animalia a speluncā ceperunt, vobis dabo."},
+    {name="Octavia", content="Quid agit saxum in donis?"},
+    {name="Rex animalium", content="Nolite id tangere! Saxum sacrum est."},
+    {name="Rex animalium", content="Si moverit, animum crudelem excitabit, qui tantā irā veniet et omnia delebit."},
+    {name="Octavia", content="Quid est saxum aliud?"},
+    {name="Rex animalium", content="Saxum somni sicut os est."},
+    {name="Rex animalium", content="Cum dixerit, iubebit omnes prope id diu iacere dormireque."},
+    {name="Octavia", content="Quae consilia donā capere possumus?", facing="Publius"},
+    {name="Publius", content="Bonum dolum habeo.", facing="Octavia"},
+    {name="Publius", content="Senex in nave semper erit.", facing="Octavia"},
+    {name="Octavia", content="Si autem is in somno fuerit, eum e nave movere poterimus!"},
+
+    {name="Senex", content="A vos excitor. Quid nunc cupitis?"},
+    {name="Octavia", content="Navigare ad regem cupimus."},
+    {name="Senex", content="Ante bellum, rex ad litorem occultum in mari moverat. Numquam id videbitis."},
+    {name="Octavia", content="Temptare debemus."},
+    {name="Senex", content="Discedite! A vos non vincar."},
+
+    {name="Octavia", content="Iace!"},
+  }
 }
 
 DIALOG.CH1_SEP = {4, 5, #DIALOG.ch1}
 DIALOG.CH2_SEP = {2, 5, 6, 13, #DIALOG.ch2}
 DIALOG.CH3_SEP = {1, 8, 10, 11, #DIALOG.ch3}
 DIALOG.CH4_SEP = {8, #DIALOG.ch4}
+DIALOG.CH5_SEP = {11, 16, #DIALOG.ch5}
 
 -- debug only
 local function printTable(tbl, indent)

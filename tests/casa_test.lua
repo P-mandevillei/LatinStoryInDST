@@ -20,11 +20,14 @@ function Vector3(x, y, z) return setmetatable({x = x, y = y, z = z}, Vector) end
 function Asset(kind, file) return {type = kind, file = file} end
 function Prefab(name, fn, assets, deps) return {name = name, fn = fn, assets = assets, deps = deps} end
 TALKINGFONT = "talkingfont"
-TUNING = {WILSON_WALK_SPEED = 4, WILSON_RUN_SPEED = 6, SPEAR_DAMAGE = 34}
+TUNING = {WILSON_WALK_SPEED = 4, WILSON_RUN_SPEED = 6, SPEAR_DAMAGE = 34,
+  PANFLUTE_SLEEPTIME = 20, PANFLUTE_SLEEPRANGE = 15}
+TheNet = {GetPVPEnabled = function() return false end}
 TUNING.BOAT = {RADIUS = 4}
 TILE_SCALE = 4
 EQUIPSLOTS = {HANDS = "hands"}
 FRAMES = 1/30
+RADIANS = 180 / math.pi
 ACTIONS = {HAMMER = "hammer"}
 TWOPI = 2 * math.pi
 WORLD_TILES = {GRASS = 1, CARPET = 2, SAVANNA = 3, FOREST = 4}
@@ -33,6 +36,7 @@ TileGroupManager = {IsLandTile = function() return true end}
 local now, tasks, speeches, serial, cave, blocked, hole, obstacle, random_angles
 local factories = {}
 local function noop() end
+math.clamp = math.clamp or function(value, low, high) return math.max(low, math.min(high, value)) end
 local function reset()
   now, tasks, speeches, serial = 0, {}, {}, 0
   cave, blocked, hole, obstacle = false, false, false, false
@@ -103,25 +107,69 @@ local function Entity()
     return {prefab = self.prefab, x = self.position.x, z = self.position.z}
   end
   function inst:HasTag(tag) return self.tags[tag] == true end
+  function inst:HasAnyTag(tags)
+    for _, tag in ipairs(tags) do if self:HasTag(tag) then return true end end
+    return false
+  end
+  function inst:HasDebuff() return false end
+  function inst:StopBrain() self.brainstopped = true end
+  function inst:RestartBrain() self.brainstopped = false end
   function inst:AddTag(tag) self.tags[tag] = true end
   function inst:RemoveTag(tag) self.tags[tag] = nil end
-  function inst:RemoveComponent(name) self.components[name] = nil end
+  function inst:RemoveComponent(name)
+    local component = self.components[name]
+    if component ~= nil and component.OnRemoveFromEntity ~= nil then component:OnRemoveFromEntity() end
+    self.components[name] = nil
+    self:RemoveTag("_" .. name)
+  end
+  function inst:StartUpdatingComponent(component)
+    self.updating = self.updating or {}
+    self.updating[component] = true
+  end
+  function inst:StopUpdatingComponent(component)
+    if self.updating ~= nil then self.updating[component] = nil end
+  end
   function inst:SetPrefabName(name) self.prefab = name end
   function inst:SetPrefabNameOverride(name) self.nameoverride = name end
   function inst:GetPosition() return Vector3(self.position:Get()) end
   function inst:GetDistanceSqToPoint(point)
     return (self.position.x-point.x)^2 + (self.position.z-point.z)^2
   end
-  function inst:GetCurrentPlatform() return self.platform end
+  function inst:GetDistanceSqToInst(other) return self:GetDistanceSqToPoint(other.position) end
+  function inst:GetCurrentPlatform()
+    return (self.parent ~= nil and self.parent:GetCurrentPlatform()) or self.platform
+  end
   function inst:GetPhysicsRadius() return self.radius or 0 end
   function inst:IsNear(other, distance)
     return (self.position.x - other.position.x)^2 + (self.position.z - other.position.z)^2 <= distance^2
   end
-  function inst:FacePoint(x, y, z) self.facing = Vector3(x, y, z) end
+  function inst:FacePoint(x, y, z)
+    if self.sg ~= nil and self.sg:HasStateTag("busy") then return end
+    self:ForceFacePoint(x, y, z)
+  end
+  function inst:ForceFacePoint(x, y, z)
+    self.facing = Vector3(x, y, z)
+    self.Transform.rotation = math.atan2(self.position.z - z, x - self.position.x) * 180 / math.pi
+  end
+  function inst:GetAngleToPoint(x, y, z)
+    return math.atan2(self.position.z - z, x - self.position.x) * RADIANS
+  end
   function inst:ClearBufferedAction() self.cleared = true end
-  function inst:ListenForEvent(name, fn) self.events[name] = fn end
+  function inst:ListenForEvent(name, fn)
+    local previous = self.events[name]
+    self.events[name] = previous == nil and fn or function(inst, data) previous(inst, data); fn(inst, data) end
+  end
   function inst:PushEvent(name, data)
     if self.events[name] ~= nil then self.events[name](self, data) end
+    if self._test_stategraph ~= nil then
+      local state = self.sg.currentstate
+      for _, event in ipairs(state ~= nil and state.events or {}) do
+        if event.event == name then event.fn(self, data) end
+      end
+      for _, event in ipairs(self._test_stategraph.events) do
+        if event.event == name then event.fn(self, data) end
+      end
+    end
   end
   function inst:DoTaskInTime(delay, fn, ...)
     local args, n = {...}, select("#", ...)
@@ -131,18 +179,23 @@ local function Entity()
     table.insert(tasks, task)
     return task
   end
-  function inst:DoPeriodicTask(period, fn)
-    local task = self:DoTaskInTime(period, fn)
+  function inst:DoPeriodicTask(period, fn, initialdelay, ...)
+    local task = self:DoTaskInTime(initialdelay or period, fn, ...)
     task.period = period
     return task
   end
   inst.entity = setmetatable({_inst = inst, SetParent = function(_, parent) inst.parent = parent._inst end,
+    IsVisible = function() return true end,
     SetPristine = function() inst.pristine = true end,
     GetParent = function() return nil end}, {__index = function() return noop end})
   inst.Transform = {SetFourFaced = noop, SetTwoFaced = noop, SetScale = noop}
   function inst.Transform:GetWorldPosition() return inst.position:Get() end
   function inst.Transform:SetPosition(x, y, z) inst.position = Vector3(x, y, z) end
+  function inst.Transform:GetRotation() return self.rotation or 0 end
+  function inst.Transform:SetRotation(value) self.rotation = value end
   inst.Physics = {Teleport = function(_, x, y, z) inst.Transform:SetPosition(x, y, z) end,
+    SetMotorVel = function(_, x, y, z) inst.motor = Vector3(x, y, z) end,
+    Stop = function() inst.motor = Vector3(0, 0, 0) end,
     SetVel = function(_, x, y, z) inst.velocity = Vector3(x, y, z) end}
   inst.AnimState = {Hide = noop, Show = noop, OverrideSymbol = noop, PushAnimation = noop,
     AddOverrideBuild = function(self, build) self.overridebuild = build end}
@@ -230,6 +283,100 @@ local function Entity()
       end
     elseif name == "inventoryitem" then
       function c:GetGrandOwner() return self.owner end
+    elseif name == "named" then
+      if package.preload["components/gamenamed"] ~= nil then
+        inst.replica = inst.replica or {}
+        inst.replica.named = {SetName = function(_, value) inst.replicatedname = value end}
+        self.components[name] = require("components/gamenamed")(self)
+      else
+        function c:SetName(name) self.name, inst.name = name, name end
+        function c:OnSave() return {name = self.name} end
+        function c:OnLoad(data) self:SetName(data.name) end
+      end
+    elseif name == "instrument" then
+      if package.preload["components/gameinstrument"] ~= nil then
+        self.components[name] = require("components/gameinstrument")(self)
+      else
+        function c:SetOnPlayedFn(fn) self.onplayed = fn end
+        function c:Play(musician)
+          if self.onplayed ~= nil then self.onplayed(inst, musician) end
+          for _, listener in ipairs(TheSim:FindEntities(musician.position.x, 0, musician.position.z, 15)) do
+            if self.onheard ~= nil then self.onheard(listener, musician, inst) end
+          end
+          return true
+        end
+      end
+    elseif name == "sleeper" then
+      if package.preload["components/gamesleeper"] ~= nil then
+        self.components[name] = require("components/gamesleeper")(self)
+      else
+        self:AddTag("sleeper")
+        c.sleepiness = 0
+        function c:SetResistance(value) self.resistance = value end
+        function c:SetSleepTest(fn) self.sleeptestfn = fn end
+        function c:SetWakeTest(fn) self.waketestfn = fn end
+        function c:IsAsleep() return self.isasleep == true end
+        function c:IsInDeepSleep() return self:IsAsleep() and self.sleepiness > 0 end
+        function c:StopTesting() if self.task ~= nil then self.task:Cancel(); self.task = nil end end
+        function c:GoToSleep(duration)
+          self:StopTesting()
+          local wasasleep = self:IsAsleep()
+          self.isasleep = true
+          inst:StopBrain()
+          inst.components.combat:DropTarget()
+          inst.components.locomotor:Stop()
+          if not wasasleep then inst:PushEvent("gotosleep") end
+          self.task = inst:DoTaskInTime(duration or 4, function()
+            if self.waketestfn(inst) then self:WakeUp() end
+          end)
+        end
+        function c:WakeUp()
+          if not self:IsAsleep() then return end
+          self:StopTesting()
+          self.isasleep, self.sleepiness = false, 0
+          inst:RestartBrain()
+          inst:PushEvent("onwakeup")
+        end
+        function c:AddSleepiness(value, duration)
+          self.sleepiness = self.sleepiness + value
+          if self.sleepiness > self.resistance then self:GoToSleep(duration) end
+        end
+        inst:ListenForEvent("attacked", function() c:WakeUp() end)
+      end
+    elseif name == "senexshorepush" then
+      self.components[name] = require("components/senexshorepush")(self)
+    elseif name == "pushable" then
+      if package.preload["components/gamepushable"] ~= nil then
+        self.components[name] = require("components/gamepushable")(self)
+      else
+        function c:SetPushingSpeed(value) self.speed = value end
+        function c:SetTargetDist(value) self.targetdist = value end
+        function c:SetMinDist(value) self.mindist = value end
+        function c:SetMaxDist(value) self.maxdist = value end
+        function c:SetOnStartPushingFn(fn) self.onstartpushingfn = fn end
+        function c:SetOnStopPushingFn(fn) self.onstoppushingfn = fn end
+        function c:IsPushing() return self.doer ~= nil end
+        function c:GetPushingSpeed() return self.speed end
+        function c:StartPushing(doer)
+          self:StopPushing()
+          self.doer = doer
+          self.onstartpushingfn(inst, doer)
+          if self.doer ~= nil then self:OnUpdate(0) end
+        end
+        function c:StopPushing()
+          if self.doer ~= nil then
+            self.doer = nil
+            inst.Physics:Stop()
+            self.onstoppushingfn(inst)
+          end
+        end
+        function c:OnUpdate()
+          if self.doer == nil or not self.doer:IsValid() or not self.doer.sg:HasStateTag("pushing_walk") then
+            self:StopPushing()
+          else inst.Physics:SetMotorVel(self.speed, 0, 0) end
+        end
+        c.OnRemoveFromEntity = c.StopPushing
+      end
     end
     return c
   end
@@ -254,8 +401,10 @@ function SpawnPrefab(name)
       inst:AddComponent("weapon"):SetDamage(TUNING.SPEAR_DAMAGE)
     elseif name == "boat" then
       inst:AddTag("boat")
+      function inst:RemovePlatformFollower(ent) if ent.platform == self then ent.platform = nil end end
       inst.components.walkableplatform = {platform_radius = TUNING.BOAT.RADIUS,
-        AddEntityToPlatform = function(_, ent) ent.platform = inst end}
+        AddEntityToPlatform = function(_, ent) ent.platform = inst end,
+        RemoveObject = function(_, ent) if ent.platform == inst then ent.platform = nil end end}
       inst.components.hull = {OnDeployed = function() inst.deployed = true end}
       inst.components.boatphysics = {}
     elseif name == "anchor" then
@@ -285,6 +434,20 @@ function SpawnPrefab(name)
       inst.sg.mem = {}
       function inst:IsMinigameActive() return self.minigame_active == true end
       require("rexanimalium").Setup(inst)
+    elseif name == "panflute" then
+      inst:AddComponent("instrument")
+      local native = package.preload["gamepanflutefunctions"] ~= nil and require("gamepanflutefunctions") or nil
+      inst.components.instrument.onplayed = native ~= nil and native.OnPlayed or function(item)
+        item.panflute_sleeptime = TUNING.PANFLUTE_SLEEPTIME
+      end
+      inst.components.instrument.onheard = native ~= nil and native.HearPanFlute or function(listener, musician, item)
+        if listener ~= musician and listener.components.sleeper ~= nil then
+          listener.components.sleeper:AddSleepiness(10, item.panflute_sleeptime)
+        end
+      end
+      require("storyitems").SetupPanFlute(inst)
+    elseif name == "bell" then
+      require("storyitems").SetupNamed(inst)
     elseif name == "evergreen" then
       inst:AddTag("tree")
       inst.components.growable = {}
@@ -1724,7 +1887,8 @@ test("Rex plays nine through thirteen nearby and grants both gifts only after th
   equal(progress.chapter, "ch4")
   advance(.01)
   equal(progress.chapter, "ch5")
-  equal(progress.dialog, 1)
+  equal(progress.dialog, 2)
+  equal(speeches[6].content, DIALOG.ch5[1].content)
   equal(CountPrefab("panflute"), 1)
   equal(CountPrefab("bell"), 1)
   local saved = progress:OnSave()
@@ -1824,6 +1988,513 @@ test("Passer leaves after line eight finishes and tracks the player's effective 
   equal(restored._flight_target.x, bird._flight_target.x)
 end)
 
+local function AttachSenexGraph(senex)
+  local graph = dofile("scripts/stategraphs/SGsenex.lua")
+  local states = {}
+  for _, state in ipairs(graph.states) do states[state.name] = state end
+  senex._test_stategraph = graph
+  function senex.sg:HasStateTag(tag)
+    for _, value in ipairs(self.currentstate ~= nil and self.currentstate.tags or {}) do
+      if value == tag then return true end
+    end
+    return false
+  end
+  function senex.sg:GoToState(name, data)
+    if self.currentstate ~= nil and self.currentstate.onexit ~= nil then self.currentstate.onexit(senex) end
+    self.state, self.statemem = name, {}
+    self.currentstate = states[name] or {tags = {name}}
+    if self.currentstate.onenter ~= nil then self.currentstate.onenter(senex, data) end
+  end
+  senex.sg:GoToState("idle")
+  return states
+end
+
+test("chapter five follows chapter four immediately and plays all eleven gift lines without proximity gates", function()
+  local player, progress, king = RexEncounter()
+  player.position = king.position
+  progress:SetProgress("ch4", 13)
+  progress:DialogLoop(player)
+  advance(HELPERS.DIALOG_INTERVAL)
+  equal(#speeches, 2)
+  equal(speeches[2].at, speeches[1].at + HELPERS.DIALOG_INTERVAL)
+  player.position = Vector3(900, 0, 900)
+  advance(11 * HELPERS.DIALOG_INTERVAL)
+  equal(#speeches, 12)
+  equal(progress.chapter, "ch5")
+  equal(progress.dialog, 12)
+  for i = 1, 11 do
+    local speech, line = speeches[i + 1], DIALOG.ch5[i]
+    equal(speech.content, line.content)
+    equal(speech.speaker, line.name == "Rex animalium" and king._libellus_rex_voice
+      or line.name == "Publius" and progress._publius or player)
+    equal(speech.at, speeches[i].at + HELPERS.DIALOG_INTERVAL)
+  end
+  local restoredplayer, restored = Player()
+  restored:OnLoad(progress:OnSave())
+  restoredplayer.position = Vector3(900, 0, 900)
+  restored:DialogLoop(restoredplayer)
+  advance(4)
+  equal(#speeches, 12)
+  equal(restored.dialog, 12)
+end)
+
+test("Rex gives native items with saved story names and leaves ordinary items unnamed", function()
+  local player, progress, king = RexEncounter()
+  progress:SetProgress("ch4", 13)
+  king:GiveLibellusGift("panflute", player)
+  king:GiveLibellusGift("bell", player)
+  local flute, bell
+  for _, ent in pairs(Ents) do
+    if ent.prefab == "panflute" then flute = ent elseif ent.prefab == "bell" then bell = ent end
+  end
+  equal(flute.name, "Saxum Somni")
+  equal(bell.name, "Saxum Sacrum")
+  equal(SpawnPrefab("panflute").name, nil)
+  equal(SpawnPrefab("bell").name, nil)
+  local restored = SpawnPrefab("panflute")
+  restored.components.named:OnLoad(flute.components.named:OnSave())
+  equal(restored.name, "Saxum Somni")
+end)
+
+test("Senex sleeps on sight, wakes nearby with native animations, and then speaks twelve through sixteen", function()
+  local sleepasset = false
+  for _, asset in ipairs(require("prefabs/senex").assets) do
+    if asset.file == "anim/player_knockedout.zip" then sleepasset = true end
+  end
+  equal(sleepasset, true)
+  local player, progress, _, _, senex = ShipEncounter()
+  AttachSenexGraph(senex)
+  progress:SetProgress("ch5", 12)
+  player.position = senex.position + Vector3(HELPERS.SENEX_MEETING_DISTANCE + 1, 0, 0)
+  progress:DialogLoop(player)
+  equal(senex.components.sleeper:IsAsleep(), true)
+  equal(senex.AnimState.animation, "dozy")
+  senex:PushEvent("animover")
+  equal(senex.AnimState.animation, "sleep_loop")
+  if senex.components.sleeper.OnEntityWake ~= nil then senex.components.sleeper:OnEntityWake() end
+  advance(6)
+  equal(#speeches, 0)
+  equal(senex.components.sleeper:IsAsleep(), true)
+  player.position = senex.position + Vector3(HELPERS.SENEX_MEETING_DISTANCE, 0, 0)
+  senex.visible = false
+  advance(2)
+  equal(senex.components.sleeper:IsAsleep(), true)
+  senex.visible = true
+  advance(2)
+  equal(senex.components.sleeper:IsAsleep(), false)
+  equal(senex.AnimState.animation, "wakeup")
+  equal(#speeches, 0)
+  senex:PushEvent("animover")
+  advance(27)
+  equal(#speeches, 5)
+  equal(progress.dialog, 17)
+  for i = 12, 16 do
+    equal(speeches[i - 11].content, DIALOG.ch5[i].content)
+    equal(speeches[i - 11].speaker, DIALOG.ch5[i].name == "Senex" and senex or player)
+  end
+  advance(8)
+  equal(#speeches, 5, "line seventeen must wait for a flute play")
+end)
+
+test("Senex conversation waits for the gift discussion and pauses outside meeting range", function()
+  local player, progress, _, _, senex = ShipEncounter()
+  AttachSenexGraph(senex)
+  player.position = senex.position
+  progress:SetProgress("ch5", 10)
+  progress:DialogLoop(player)
+  senex:PushEvent("animover")
+  advance(9.99)
+  equal(#speeches, 2)
+  equal(progress.dialog, 12)
+  advance(.01)
+  equal(speeches[3].content, DIALOG.ch5[12].content)
+  player.position = Vector3(900, 0, 900)
+  advance(10)
+  equal(#speeches, 3)
+  player.position = senex.position
+  advance(2)
+  equal(speeches[4].content, DIALOG.ch5[13].content)
+  progress:SetProgress("ch2", 6)
+  player.busy = true
+  advance(10)
+  equal(#speeches, 4)
+  equal(progress.chapter, "ch2")
+end)
+
+test("story sleep survives loading and is prepared only once", function()
+  local _, _, _, ship, senex = ShipEncounter()
+  AttachSenexGraph(senex)
+  equal(senex.components.sleeper:IsAsleep(), false)
+  senex:PrepareStorySleep()
+  local data = {}
+  senex:OnSave(data)
+  equal(data.story_sleep, true)
+  local restored = SpawnPrefab("senex")
+  AttachSenexGraph(restored)
+  restored:OnLoad(data)
+  restored:OnLoadPostPass({[ship.GUID] = {entity = ship}}, data)
+  advance(0)
+  equal(restored.components.sleeper:IsAsleep(), true)
+  restored:WakeForStory()
+  restored:PushEvent("animover")
+  restored:PrepareStorySleep()
+  equal(restored.components.sleeper:IsAsleep(), false)
+end)
+
+test("native flute effects repeat line seventeen and put Senex to sleep without proximity waking or combat", function()
+  local player, progress, _, ship, senex = ShipEncounter()
+  local states = AttachSenexGraph(senex)
+  player.position = senex.position
+  ship.components.walkableplatform:AddEntityToPlatform(player)
+  progress:SetProgress("ch5", 17)
+  progress:DialogLoop(player)
+  senex:PushEvent("animover")
+  local flute = SpawnPrefab("panflute")
+  local distant = SpawnPrefab("senex")
+  distant.position = Vector3(900, 0, 900)
+  equal(flute.components.instrument:Play(player), true)
+  equal(flute.panflute_sleeptime, TUNING.PANFLUTE_SLEEPTIME)
+  equal(speeches[#speeches].content, DIALOG.ch5[17].content)
+  equal(senex.components.sleeper:IsAsleep(), true)
+  equal(distant.components.sleeper:IsAsleep(), false)
+  equal(senex.brainstopped, true)
+  equal(senex.components.combat.target, nil)
+  senex:PushEvent("animover")
+  equal(senex.AnimState.animation, "sleep_loop")
+  senex.sg.statemem.target = player
+  states.attack.timeline[1].fn(senex)
+  equal(player.components.health.currenthealth, 150)
+  progress:PrepareChapterFiveSenex(player)
+  equal(senex.components.sleeper:IsAsleep(), true)
+  advance(TUNING.PANFLUTE_SLEEPTIME - .01)
+  equal(senex.components.sleeper:IsAsleep(), true)
+  advance(.01)
+  equal(senex.components.sleeper:IsAsleep(), false)
+  equal(senex.AnimState.animation, "wakeup")
+  equal(progress.dialog, 17)
+  flute.components.instrument:Play(player)
+  equal(#speeches, 2)
+  equal(speeches[2].content, DIALOG.ch5[17].content)
+  equal(senex.components.sleeper:IsAsleep(), true)
+end)
+
+test("flute speech is independent of progress, preserves existing callbacks, and skips client components", function()
+  local player, progress, _, _, senex = ShipEncounter()
+  AttachSenexGraph(senex)
+  progress:SetProgress("ch3", 4)
+  player.position = Vector3(900, 0, 900)
+  local flute, calls = Entity(), 0
+  flute:AddComponent("instrument")
+  flute.components.instrument.onplayed = function() calls = calls + 1 end
+  require("storyitems").SetupPanFlute(flute)
+  flute.components.instrument:Play(player)
+  equal(calls, 1)
+  equal(#speeches, 1)
+  equal(progress.chapter, "ch3")
+  equal(progress.dialog, 4)
+  equal(senex.components.sleeper:IsAsleep(), false)
+  TheWorld.ismastersim = false
+  local client = Entity()
+  require("storyitems").SetupPanFlute(client)
+  equal(client.components.named, nil)
+  equal(client.components.instrument, nil)
+end)
+
+local function PushEncounter(edge)
+  local player, progress, navis, ship, senex = ShipEncounter()
+  AttachSenexGraph(senex)
+  senex.position = ship.position + Vector3(edge and 3 or 2, 0, 0)
+  player.position = senex.position + Vector3(-1.5, 0, 0)
+  ship.components.walkableplatform:AddEntityToPlatform(player)
+  player.sg.state = "pushing_walk"
+  TheWorld.Map.IsLandTileAtPoint = function(_, x) return x >= 105 end
+  senex.components.sleeper:AddSleepiness(10, 20)
+  senex:PushEvent("animover")
+  return player, progress, navis, ship, senex, senex.components.senexshorepush
+end
+
+test("one native Push click shoves sleeping Senex beyond the boat diameter even after release", function()
+  local player, _, _, ship, senex, pushing = PushEncounter(false)
+  local pushable = senex.components.pushable
+  equal(pushable ~= nil, true)
+  local start = senex:GetPosition()
+  pushable:StartPushing(player)
+  equal(pushable:IsPushing(), false)
+  assert(pushing.destination.x - start.x > 2 * TUNING.BOAT.RADIUS)
+  equal(senex.AnimState.animation, "sleep_loop")
+  player.sg.state = "idle"
+  pushing:OnUpdate(pushing.duration)
+  equal(senex.position.x, start.x + HELPERS.SENEX_PUSH_DISTANCE)
+  equal(senex:GetCurrentPlatform(), nil)
+  equal(player:GetCurrentPlatform(), ship)
+  equal(senex.components.sleeper:IsAsleep(), true)
+  senex.components.sleeper:WakeUp()
+  equal(senex.components.pushable, nil)
+  equal(senex.AnimState.animation, "wakeup")
+end)
+
+test("a sleeping Senex turns away from the pusher even though his state is busy", function()
+  local player, _, _, _, senex, pushing = PushEncounter(false)
+  if package.preload["gameentityfacing"] ~= nil then
+    local native = require("gameentityfacing")
+    senex.FacePoint, senex.ForceFacePoint, senex.GetAngleToPoint = native.FacePoint, native.ForceFacePoint, native.GetAngleToPoint
+  end
+  TheWorld.Map.IsLandTileAtPoint = function(_, x) return x <= 95 end
+  player.position = senex.position + Vector3(1.5, 0, 0)
+  senex.Transform:SetRotation(0)
+  assert(senex.sg:HasStateTag("busy"))
+  senex:FacePoint(90, 0, 100)
+  equal(senex.Transform:GetRotation(), 0, "native FacePoint must refuse to turn a busy sleeper")
+  senex.components.pushable:StartPushing(player)
+  assert(pushing.destination.x < 94, "the shove should aim west toward land, rather than stopping at the east boat edge")
+  assert(pushing.landing_on_shore)
+  pushing:OnUpdate(pushing.duration)
+  equal(senex.position.x, 92)
+  equal(senex:GetCurrentPlatform(), nil)
+end)
+
+test("the boat's invisible NOBLOCK item collision does not prevent a shove from starting", function()
+  local player, _, _, ship, senex, pushing = PushEncounter(false)
+  -- Native boat_item_collision has a radius + .2 mesh and these tags, but
+  -- unlike boat_player_collision it does not carry NOCLICK.
+  local boundary = Entity()
+  boundary.prefab, boundary.radius, boundary.position = "boat_item_collision", TUNING.BOAT.RADIUS + .2, ship:GetPosition()
+  for _, tag in ipairs({"CLASSIFIED", "NOBLOCK", "ignorewalkableplatforms"}) do boundary:AddTag(tag) end
+  assert(not boundary:HasTag("NOCLICK"))
+  senex.components.pushable:StartPushing(player)
+  assert(pushing.destination ~= nil, "the boat's own nonblocking helper must not cancel the shove")
+  pushing:OnUpdate(pushing.duration)
+  equal(senex.position.x, 112)
+  equal(senex:GetCurrentPlatform(), nil)
+end)
+
+test("one shove ignores the navis wheel, mast, anchor, and parented deck attachments", function()
+  local player, _, navis, ship, senex, pushing = PushEncounter(false)
+  for i, item in ipairs({navis._wheel, navis._mast, navis._anchor}) do
+    item.radius = .6
+    item.position = ship.position + Vector3(2.5 + i * .25, 0, 0)
+    equal(item:GetCurrentPlatform(), ship)
+  end
+  local sail = Entity()
+  sail.radius, sail.position, sail.parent = 1, ship.position + Vector3(3.5, 0, 0), navis._mast
+  equal(sail:GetCurrentPlatform(), ship)
+  TheWorld.Map.IsLandTileAtPoint = function(_, x) return x >= 108 end
+  senex.components.pushable:StartPushing(player)
+  assert(pushing.destination ~= nil and pushing.landing_on_shore)
+  equal(pushing.destination.x, 112, "clear land at the full shove distance must be reached despite deck furniture")
+  pushing:OnUpdate(pushing.duration)
+  equal(senex.position.x, 112)
+  equal(senex:GetCurrentPlatform(), nil)
+  equal(player:GetCurrentPlatform(), ship)
+end)
+
+test("ignoring deck furniture still stops at the boat brink when there is no reachable land", function()
+  local player, _, navis, ship, senex, pushing = PushEncounter(false)
+  navis._wheel.radius, navis._wheel.position = .6, ship.position + Vector3(3, 0, 0)
+  TheWorld.Map.IsLandTileAtPoint = function() return false end
+  senex.components.pushable:StartPushing(player)
+  equal(pushing.landing_on_shore, false)
+  pushing:OnUpdate(pushing.duration)
+  equal(senex.position.x, 103.25)
+  equal(senex:GetCurrentPlatform(), ship)
+end)
+
+test("a dockside shove slides Senex onto clear shore asleep and keeps him there after waking", function()
+  local player, _, _, ship, senex, pushing = PushEncounter(true)
+  senex.components.pushable:StartPushing(player)
+  local landing = pushing.destination
+  assert(landing ~= nil and landing.x >= 105.65)
+  equal(senex.components.pushable:IsPushing(), false)
+  pushing:OnUpdate(pushing.duration / 2)
+  assert(senex.position.x > 103 and senex.position.x < landing.x)
+  equal(senex.components.sleeper:IsAsleep(), true)
+  -- The platform's object list can lag behind its follower list by a tick.
+  ship.components.walkableplatform.RemoveObject = noop
+  pushing:OnUpdate(pushing.duration / 2)
+  equal(senex.position.x, landing.x)
+  equal(senex:GetCurrentPlatform(), nil)
+  equal(player:GetCurrentPlatform(), ship)
+  equal(senex._shore_home, landing)
+  equal(senex.AnimState.animation, "sleep_loop")
+  senex.components.sleeper:WakeUp()
+  senex:PushEvent("animover")
+  ship.position = Vector3(200, 0, 100)
+  local brain = dofile("scripts/brains/senexbrain.lua")(senex)
+  brain:OnStart()
+  equal(brain.bt.root.children[1].fn(), false)
+  equal(brain.bt.root.children[3].home().x, landing.x)
+  equal(senex:CanGuardTarget(player), false)
+  local data = {}
+  senex:OnSave(data)
+  local restored = SpawnPrefab("senex")
+  restored:OnLoad(data)
+  equal(restored._shore_home.x, landing.x)
+end)
+
+test("unsafe landings stop Senex at the boat brink instead of dropping him into water", function()
+  for _, danger in ipairs({"ocean", "hole", "blocked", "wall"}) do
+    reset()
+    local player, _, _, _, senex, pushing = PushEncounter(true)
+    if danger == "ocean" then TheWorld.Map.IsLandTileAtPoint = function() return false end
+    elseif danger == "hole" then hole = true
+    elseif danger == "blocked" then TheWorld.Map.IsPassableAtPoint = function() return false end
+    else
+      local wall = SpawnPrefab("wall_stone")
+      wall.radius, wall.position = .3, Vector3(104.5, 0, 100)
+    end
+    senex.components.pushable:StartPushing(player)
+    assert(pushing.destination ~= nil)
+    equal(pushing.landing_on_shore, false)
+    pushing:OnUpdate(pushing.duration)
+    assert(senex.position.x > 103)
+    assert(senex.position.x <= 104 - senex:GetPhysicsRadius(0))
+    equal(senex:GetCurrentPlatform(), senex._ship)
+    equal(senex._shore_home, nil)
+    equal(senex.components.pushable:IsPushing(), false)
+    equal(senex.components.sleeper:IsAsleep(), true)
+  end
+end)
+
+test("a single shove crosses a small water gap without the boat touching shore", function()
+  local player, _, _, ship, senex, pushing = PushEncounter(false)
+  -- The boat ends at x=104; land starts at x=108, four units away.
+  TheWorld.Map.IsLandTileAtPoint = function(_, x) return x >= 108 end
+  senex.components.pushable:StartPushing(player)
+  equal(pushing.landing_on_shore, true)
+  assert(pushing.destination.x >= 108.65)
+  pushing:OnUpdate(pushing.duration)
+  equal(senex.position.x, 112)
+  equal(senex:GetCurrentPlatform(), nil)
+  equal(player:GetCurrentPlatform(), ship)
+end)
+
+test("a wide water gap or distant shore leaves Senex safely at the boat edge", function()
+  for _, shoreline in ipairs({110, 130}) do
+    reset()
+    local player, _, _, ship, senex, pushing = PushEncounter(false)
+    TheWorld.Map.IsLandTileAtPoint = function(_, x) return x >= shoreline end
+    senex.components.pushable:StartPushing(player)
+    equal(pushing.landing_on_shore, false)
+    pushing:OnUpdate(pushing.duration)
+    equal(senex.position.x, 103.25)
+    equal(senex:GetCurrentPlatform(), ship)
+  end
+end)
+
+test("a shove onto a narrow island stops on land instead of overshooting back into water", function()
+  local player, _, _, _, senex, pushing = PushEncounter(false)
+  TheWorld.Map.IsLandTileAtPoint = function(_, x) return x >= 106 and x <= 110 end
+  senex.components.pushable:StartPushing(player)
+  equal(pushing.landing_on_shore, true)
+  assert(pushing.destination.x < 110)
+  pushing:OnUpdate(pushing.duration)
+  assert(senex.position.x >= 106.65 and senex.position.x <= 109.35)
+  equal(senex:GetCurrentPlatform(), nil)
+end)
+
+test("a boat-edge shove stays attached to a boat that moves during the shove", function()
+  local player, _, _, ship, senex, pushing = PushEncounter(false)
+  TheWorld.Map.IsLandTileAtPoint = function() return false end
+  senex.components.pushable:StartPushing(player)
+  ship.position = ship.position + Vector3(0, 0, 2)
+  pushing:OnUpdate(pushing.duration)
+  equal(senex.position.x, 103.25)
+  equal(senex.position.z, 102)
+  equal(senex:GetCurrentPlatform(), ship)
+end)
+
+test("shore pushes reject ghosts, dead or distant players, and players on another surface", function()
+  for _, invalid in ipairs({"ghost", "dead", "distant", "surface"}) do
+    reset()
+    local player, _, _, _, senex = PushEncounter(false)
+    if invalid == "ghost" then player:AddTag("playerghost")
+    elseif invalid == "dead" then player.components.health.currenthealth = 0
+    elseif invalid == "distant" then player.position = Vector3(800, 0, 800)
+    else player.platform = nil end
+    senex.components.pushable:StartPushing(player)
+    equal(senex.components.pushable:IsPushing(), false)
+  end
+end)
+
+test("waking or losing a safe landing during a shove returns Senex to the moving deck", function()
+  for _, interrupted in ipairs({"wake", "obstacle"}) do
+    reset()
+    local player, _, _, ship, senex, pushing = PushEncounter(true)
+    senex.components.pushable:StartPushing(player)
+    pushing:OnUpdate(pushing.duration / 2)
+    ship.position = ship.position + Vector3(0, 0, 1)
+    if interrupted == "wake" then senex.components.sleeper:WakeUp()
+    else hole = true; pushing:OnUpdate(.1) end
+    equal(senex.position.x, 103)
+    equal(senex.position.z, 101)
+    equal(senex:GetCurrentPlatform(), ship)
+    equal(senex._shore_home, nil)
+    equal(pushing.destination, nil)
+  end
+end)
+
+test("saving halfway across the shore gap restores a safe deck position", function()
+  local player, _, _, ship, senex, pushing = PushEncounter(true)
+  senex.components.pushable:StartPushing(player)
+  pushing:OnUpdate(pushing.duration / 2)
+  local data = pushing:OnSave()
+  equal(data.origin.x, 103)
+  local restored = SpawnPrefab("senex")
+  restored._ship = ship
+  restored.position = senex:GetPosition()
+  restored.components.senexshorepush:OnLoad(data)
+  advance(0)
+  equal(restored.position.x, 103)
+  equal(restored:GetCurrentPlatform(), ship)
+end)
+
+if package.preload["gamepushingstates"] ~= nil then
+  test("DST server and client push states animate and execute the native Push action on sleeping Senex", function()
+    local native = require("gamepushingstates")
+    local player, _, _, _, senex = PushEncounter(false)
+    player:AddComponent("locomotor")
+    function player.sg:HasStateTag(tag)
+      return tag == "pushing_walk" and (self.state == "pushing_walk_pre" or self.state == "pushing_walk")
+    end
+    function player.sg:SetTimeout(value) self.timeout = value end
+    function player:GetBufferedAction() return self.bufferedaction end
+    function player:PerformBufferedAction() return native.action(self.bufferedaction) end
+    player.bufferedaction = {doer = player, target = senex}
+    player.sg.state = native.server.name
+    native.server.onenter(player)
+    equal(player.AnimState.animation, "pushing_idle_pre")
+    native.server.ontimeout(player)
+    equal(player.sg.state, "pushing_walk")
+    equal(senex.components.pushable:IsPushing(), false)
+    assert(senex.components.senexshorepush.destination ~= nil)
+    equal(native.client.server_states[1], native.server.name)
+    equal(native.client.server_states[2], "pushing_walk")
+  end)
+end
+
+if package.preload["gameentityupdates"] ~= nil then
+  test("DST component updates move Senex after the native Push action has stopped", function()
+    local native = require("gameentityupdates")
+    local player, _, _, ship, senex, pushing = PushEncounter(false)
+    for _, method in ipairs({"StartUpdatingComponent", "StopUpdatingComponent", "StopUpdatingComponent_Deferred"}) do
+      senex[method] = native[method]
+    end
+    local boundary = Entity()
+    boundary.radius, boundary.position = TUNING.BOAT.RADIUS + .2, ship:GetPosition()
+    boundary:AddTag("NOBLOCK")
+    senex.components.pushable:StartPushing(player)
+    equal(senex.components.pushable:IsPushing(), false)
+    assert(pushing.destination ~= nil)
+    -- Exercise the installed game's update loop, rather than manually calling
+    -- the shove component's OnUpdate as the isolated movement tests do.
+    for _ = 1, 90 do native.Tick(FRAMES) end
+    equal(senex.position.x, 112)
+    equal(senex:GetCurrentPlatform(), nil)
+    equal(pushing.destination, nil)
+    equal(senex.updatecomponents, nil)
+  end)
+end
+
 test("client encounter prefabs have visuals and no server-only components", function()
   TheWorld.ismastersim = false
   for _, name in ipairs({"casa", "lupa", "miles", "agricola", "agricola_crop", "agricola_farm", "navis", "senex",
@@ -1833,6 +2504,10 @@ test("client encounter prefabs have visuals and no server-only components", func
     equal(inst.components.combat, nil)
     equal(inst.components.health, nil)
     equal(inst.components.inventory, nil)
+    if name == "senex" then
+      equal(inst.components.senexshorepush, nil)
+      equal(inst.components.pushable, nil)
+    end
     if name == "miles" or name == "agricola" or name == "senex" or name == "passer" or name == "passer_free"
       or name == "rex_voice" then
       assert(inst.components.talker ~= nil)

@@ -1,7 +1,7 @@
 name = "latinPresentation"
 description = "Latin Final Project Libellus Presentation"
 author = "p_mandevillei"
-version = "0.0.2"
+version = "0.0.4"
 forumthread = ""
 -- icon_atlas = ""
 -- icon = ""

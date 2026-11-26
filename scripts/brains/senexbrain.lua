@@ -4,7 +4,7 @@ require "behaviours/standstill"
 
 local function StayAboard(inst)
   local ship = inst._ship
-  if ship ~= nil and ship:IsValid() and inst:GetCurrentPlatform() ~= ship then
+  if inst._shore_home == nil and ship ~= nil and ship:IsValid() and inst:GetCurrentPlatform() ~= ship then
     inst:ClearBufferedAction()
     inst.components.locomotor:Stop()
     local x, _, z = ship.Transform:GetWorldPosition()
@@ -22,6 +22,7 @@ function SenexBrain:OnStart()
     ConditionNode(function() return StayAboard(self.inst) end, "StayAboard"),
     ChaseAndAttack(self.inst),
     Leash(self.inst, function()
+      if self.inst._shore_home ~= nil then return self.inst._shore_home end
       local ship = self.inst._ship
       return ship ~= nil and ship:IsValid() and ship:GetPosition() or nil
     end, 1, .5),

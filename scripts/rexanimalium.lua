@@ -1,3 +1,4 @@
+local StoryItems = require("storyitems")
 local Rex = {}
 
 function Rex.Setup(inst)
@@ -16,6 +17,7 @@ function Rex.Setup(inst)
   inst.GiveLibellusGift = function(inst, prefab, player)
     local item = SpawnPrefab(prefab)
     if item == nil then return false end
+    StoryItems.NameGift(item)
     local x, _, z = inst.Transform:GetWorldPosition()
     local px, _, pz = player.Transform:GetWorldPosition()
     local dx, dz = px-x, pz-z

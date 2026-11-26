@@ -320,7 +320,16 @@ function LibellusProgress:IdleState(_, _, _, _)
   return HELPERS.CHECK_PROGRESS_INTERVAL
 end
 
+function LibellusProgress:ScheduleDialogLoop(delay)
+  if self._dialog_task ~= nil then self._dialog_task:Cancel() end
+  self._dialog_task = self.inst:DoTaskInTime(delay, function(inst)
+    self._dialog_task = nil
+    self:DialogLoop(inst)
+  end)
+end
+
 function LibellusProgress:DialogLoop(inst)
+  if self._dialog_task ~= nil then self._dialog_task:Cancel(); self._dialog_task = nil end
   local publius = not inst.loadingprotection and self:EnsurePublius() or nil
   if not inst.loadingprotection then
     self:EnsureCasa()
@@ -351,18 +360,19 @@ function LibellusProgress:DialogLoop(inst)
   end
 
   local chapter, dialog = self:GetProgress()
+  if chapter == "ch5" then self:PrepareChapterFiveSenex(inst) end
   if chapter == "ch4" and dialog > DIALOG.CH4_SEP[1]
     and (self._passer_to_rex_time == nil or GetTime() >= self._passer_to_rex_time) then
     self:GuidePasserToRex()
   end
-  local ship_dialog = chapter == "ch3" and dialog > DIALOG.CH3_SEP[1]
-    and dialog <= DIALOG.CH3_SEP[2]
+  local ship_dialog = (chapter == "ch3" and dialog > DIALOG.CH3_SEP[1]
+    and dialog <= DIALOG.CH3_SEP[2]) or (chapter == "ch5"
+    and dialog > DIALOG.CH5_SEP[1] and dialog <= DIALOG.CH5_SEP[2])
   if (self._entry_speech_until ~= nil and GetTime() < self._entry_speech_until)
+    or (self._flute_speech_until ~= nil and GetTime() < self._flute_speech_until)
     or inst.loadingprotection or inst:HasTag("playerghost") or inst.components.talker == nil
     or (not ship_dialog and (IsBusy(inst) or (publius ~= nil and IsBusy(publius)))) then
-    inst:DoTaskInTime(HELPERS.BUSY_INTERVAL, function(inst)
-      self:DialogLoop(inst)
-    end)
+    self:ScheduleDialogLoop(HELPERS.BUSY_INTERVAL)
     return
   end
 
@@ -386,11 +396,12 @@ function LibellusProgress:DialogLoop(inst)
     say_func = self.SayChapterFourPasser
   elseif chapter == "ch4" and dialog <= DIALOG.CH4_SEP[2] then
     say_func = self.SayChapterFourRex
+  elseif chapter == "ch5" then
+    if dialog <= DIALOG.CH5_SEP[1] then say_func = self.SayChapterFiveGifts
+    elseif dialog <= DIALOG.CH5_SEP[2] then say_func = self.SayChapterFiveSenex end
   end
   local delay = say_func(self, inst, chapter, dialog, revision)
-  inst:DoTaskInTime(delay, function(inst)
-    self:DialogLoop(inst)
-  end)
+  self:ScheduleDialogLoop(delay)
 end
 
 function LibellusProgress:Say(
@@ -704,7 +715,7 @@ function LibellusProgress:FinishChapterFourRex(revision)
   end
   if self._rex_panflute_received and self._rex_bell_received then
     if king.sg ~= nil and king.sg:HasStateTag("idle") then king.sg:GoToState("cointoss") end
-    self:SetProgress("ch5", 1, revision)
+    if self:SetProgress("ch5", 1, revision) then self:DialogLoop(self.inst) end
   else
     self.inst:DoTaskInTime(HELPERS.CHECK_PROGRESS_INTERVAL, function() self:FinishChapterFourRex(revision) end)
   end
@@ -733,6 +744,55 @@ function LibellusProgress:SayChapterFourRex(inst, chapter, dialog, revision)
       end
       return HELPERS.DIALOG_INTERVAL
     end)
+end
+
+function LibellusProgress:PrepareChapterFiveSenex(inst)
+  local senex = self:GetSenex()
+  if senex == nil then return end
+  senex:PrepareStorySleep()
+  if not inst.loadingprotection and not inst:HasTag("playerghost")
+    and inst:IsNear(senex, HELPERS.SENEX_MEETING_DISTANCE)
+    and CanEntitySeeTarget(inst, senex) then
+    senex:WakeForStory()
+  end
+end
+
+function LibellusProgress:SayChapterFiveGifts(inst, chapter, dialog, revision)
+  local king = self:EnsureRex()
+  local actors = {Octavia = inst, Publius = self._publius,
+    ["Rex animalium"] = king ~= nil and king._libellus_rex_voice or nil}
+  local line = DIALOG[chapter][dialog]
+  local speaker = actors[line.name]
+  if speaker == nil or not speaker:IsValid() or IsBusy(speaker) then return HELPERS.BUSY_INTERVAL end
+  local facing = actors[line.facing]
+  if facing ~= nil and facing:IsValid() then speaker:FacePoint(facing.Transform:GetWorldPosition()) end
+  return self:Say(speaker, chapter, dialog, revision, line.content,
+    function(d) return chapter, d + 1 end,
+    function() return HELPERS.DIALOG_INTERVAL end)
+end
+
+function LibellusProgress:SayChapterFiveSenex(inst, chapter, dialog, revision)
+  local senex = self:GetSenex()
+  if senex == nil or not inst:IsNear(senex, HELPERS.SENEX_MEETING_DISTANCE)
+    or not CanEntitySeeTarget(inst, senex) or senex.components.sleeper:IsAsleep()
+    or senex.sg:HasStateTag("waking") then return HELPERS.CHECK_PROGRESS_INTERVAL end
+  local line = DIALOG[chapter][dialog]
+  local speaker = line.name == "Senex" and senex or inst
+  if speaker.components.talker == nil or speaker.components.talker:IsTalking() then return HELPERS.BUSY_INTERVAL end
+  speaker:FacePoint((speaker == inst and senex or inst).Transform:GetWorldPosition())
+  return self:Say(speaker, chapter, dialog, revision, line.content,
+    function(d) return chapter, d + 1 end,
+    function() return HELPERS.DIALOG_INTERVAL end)
+end
+
+-- The native instrument invokes this only when a play action takes effect.
+-- Line seventeen is repeatable and does not rewind an ongoing conversation.
+function LibellusProgress:OnPanFlutePlayed()
+  local inst = self.inst
+  if not inst.loadingprotection and not inst:HasTag("playerghost") and inst.components.talker ~= nil then
+    inst.components.talker:Say(DIALOG.ch5[DIALOG.CH5_SEP[3]].content, HELPERS.DIALOG_INTERVAL)
+    if inst.components.talker:IsTalking() then self._flute_speech_until = GetTime() + HELPERS.DIALOG_INTERVAL end
+  end
 end
 
 return LibellusProgress

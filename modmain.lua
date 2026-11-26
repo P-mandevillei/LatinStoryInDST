@@ -40,6 +40,9 @@ HELPERS.add_quote("passer", "Passer", "Passer calidus est.")
 HELPERS.add_quote("passer_free", "Passer", "Passer a me liberatur!")
 
 AddPrefabPostInit("pigking", require("rexanimalium").Setup)
+local storyitems = require("storyitems")
+AddPrefabPostInit("panflute", storyitems.SetupPanFlute)
+AddPrefabPostInit("bell", storyitems.SetupNamed)
 
 modimport("items/hugTest.lua")
 

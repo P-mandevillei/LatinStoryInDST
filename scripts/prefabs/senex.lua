@@ -5,17 +5,35 @@ local assets = {
   Asset("ANIM", "anim/player_basic.zip"),
   Asset("ANIM", "anim/player_actions.zip"),
   Asset("ANIM", "anim/player_attacks.zip"),
+  Asset("ANIM", "anim/player_knockedout.zip"),
   Asset("ANIM", "anim/wolfgang.zip")
 }
 local prefabs = {"spear"}
 
 local function CanGuardTarget(inst, target)
   local ship = inst._ship
-  return ship ~= nil and ship:IsValid() and inst:GetCurrentPlatform() == ship
+  return inst._shore_home == nil and not inst.components.sleeper:IsAsleep() and not inst.sg:HasStateTag("waking")
+    and ship ~= nil and ship:IsValid() and inst:GetCurrentPlatform() == ship
     and target ~= nil and target:IsValid() and target:HasTag("player")
     and target:GetCurrentPlatform() == ship and not target:HasTag("playerghost")
     and not target.loadingprotection and target.components.health ~= nil
     and not target.components.health:IsDead() and inst.components.combat:CanTarget(target)
+end
+
+local function PrepareStorySleep(inst)
+  if inst._ch5_sleep_prepared or inst.components.health:IsDead() then return end
+  inst._ch5_sleep_prepared = true
+  if inst.components.sleeper:IsInDeepSleep() then return end
+  inst._story_sleep = true
+  inst.components.sleeper:GoToSleep()
+  -- Proximity wakes story sleep. A later pan flute play starts the native
+  -- wake timer again, using its own sleep duration.
+  inst.components.sleeper:StopTesting()
+end
+
+local function WakeForStory(inst)
+  if inst.components.sleeper:IsInDeepSleep() then return end
+  inst.components.sleeper:WakeUp()
 end
 
 local function UpdateTarget(inst)
@@ -51,9 +69,24 @@ local function Arm(inst)
 end
 
 local function OnSave(inst, data)
+  data.ch5_sleep_prepared = inst._ch5_sleep_prepared
+  data.shore_home = inst._shore_home ~= nil and {x = inst._shore_home.x, z = inst._shore_home.z} or nil
+  data.story_sleep = inst._story_sleep and not inst.components.sleeper:IsInDeepSleep() or nil
   if inst._ship ~= nil and inst._ship:IsValid() then
     data.ship = inst._ship.GUID
     return {inst._ship.GUID}
+  end
+end
+
+local function OnLoad(inst, data)
+  if data == nil then return end
+  inst._ch5_sleep_prepared, inst._story_sleep = data.ch5_sleep_prepared, data.story_sleep
+  if data.shore_home ~= nil then inst._shore_home = Vector3(data.shore_home.x, 0, data.shore_home.z) end
+  if inst._story_sleep then
+    inst:DoTaskInTime(0, function(inst)
+      inst.components.sleeper:GoToSleep()
+      inst.components.sleeper:StopTesting()
+    end)
   end
 end
 
@@ -81,6 +114,8 @@ local function fn()
   inst:AddTag("character")
   inst:AddTag("libellus_senex")
   inst:AddTag("NOBLOCK")
+  -- Native pan flutes search for this tag on the replicated entity.
+  inst:AddTag("sleeper")
   inst.displaynamefn = function() return "Senex" end
   inst:AddComponent("talker")
   inst.components.talker.font = TALKINGFONT
@@ -104,6 +139,16 @@ local function fn()
   inst.components.combat:SetShouldAggroFn(CanGuardTarget)
   inst:AddComponent("inventory")
   inst:AddComponent("lootdropper")
+  inst:AddComponent("sleeper")
+  inst.components.sleeper:SetResistance(1)
+  inst.components.sleeper:SetSleepTest(function() return false end)
+  inst.components.sleeper:SetWakeTest(function(inst)
+    return not inst._story_sleep or inst.components.sleeper:IsInDeepSleep()
+  end)
+  inst:AddComponent("senexshorepush")
+  inst.PrepareStorySleep = PrepareStorySleep
+  inst.WakeForStory = WakeForStory
+  inst:ListenForEvent("onwakeup", function(inst) inst._story_sleep = nil end)
   inst.CanGuardTarget = CanGuardTarget
   inst:ListenForEvent("attacked", function(inst, data)
     if CanGuardTarget(inst, data.attacker) then
@@ -113,6 +158,7 @@ local function fn()
   inst:SetStateGraph("SGsenex")
   inst:SetBrain(brain)
   inst.OnSave = OnSave
+  inst.OnLoad = OnLoad
   inst.OnLoadPostPass = OnLoadPostPass
   -- Inventory has loaded by this point; a saved spear must not be duplicated.
   inst:DoTaskInTime(0, Arm)
