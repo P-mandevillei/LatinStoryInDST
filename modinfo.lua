@@ -1,4 +1,4 @@
-name = "latinPresentation"
+name = "Latin Presentation"
 description = [[
 # Latin Libellus Presentation
 - Final Project of Latin 1510 at Washington University in St. Louis
