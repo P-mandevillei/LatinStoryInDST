@@ -1,10 +1,14 @@
 name = "latinPresentation"
-description = "Latin Final Project Libellus Presentation"
+description = [[
+# Latin Libellus Presentation
+- Final Project of Latin 1510 at Washington University in St. Louis
+Go on an adventure to rescue your pet wolf and save the animal kingdom!
+]]
 author = "p_mandevillei"
 version = "0.0.4"
 forumthread = ""
--- icon_atlas = ""
--- icon = ""
+icon_atlas = "modicon.xml"
+icon = "modicon.tex"
 client_only_mod = false
 all_clients_require_mod = true
 dst_compatible = true
@@ -17,6 +21,16 @@ mod_dependencies = {
   {workshop = "workshop-2522543318"}
 }
 configuration_options = {
+  {
+    name = "casa_supplies",
+    label = "Casa supply chest",
+    hover = "Supply the chapter-two casa once with equipment, supplies, and a full-world map scroll.",
+    options = {
+      {description = "Disabled", data = false},
+      {description = "Enabled", data = true}
+    },
+    default = false
+  },
   {
     name = "dialog_selector",
     label = "Dialogue selector",

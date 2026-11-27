@@ -1,19 +1,12 @@
 print("<------------------- LatinPresentation -------------------->")
 local HELPERS = require("helpers")
-
--- add texture & anim files
-Assets = {
-  Asset("ATLAS", "images/test.xml"),
-  Asset("IMAGE", "images/test.tex"),
-
-  Asset("ANIM", "anim/test.zip")
-}
+HELPERS.CASA_SUPPLIES_ENABLED = GetModConfigData("casa_supplies") == true
 
 -- register prefabs
 PrefabFiles = {
-  "test",
   "publius",
   "casa",
+  "libellus_worldmap",
   "miles",
   "lupa",
   "agricola",
@@ -34,16 +27,16 @@ PrefabFiles = {
 }
 
 -- name prefabs
-HELPERS.add_quote("test", "This is a test", "test display")
 HELPERS.add_quote("publius", "Publius", "Poeta est.")
 HELPERS.add_quote("casa", "Casa Octaviae", "Casa mea pulchra est.")
+HELPERS.add_quote("libellus_worldmap", "World Map", "Read this scroll to reveal the entire map of the current world.")
 HELPERS.add_quote("miles", "Miles", "Militem timeo!")
 HELPERS.add_quote("lupa", "Lupa", "Lupam bene curo et amo.")
 HELPERS.add_quote("agricola", "Agricola", "Agricola bonus est.")
 HELPERS.add_quote("senex", "Senex", "Militi similis est.")
 HELPERS.add_quote("passer", "Passer", "Passer calidus est.")
 HELPERS.add_quote("passer_free", "Passer", "Passer a me liberatur!")
-HELPERS.add_quote("king_castle", "Regia", "Rex hic habitat.")
+HELPERS.add_quote("king_castle", "Castra", "Rex hic habitat.")
 HELPERS.add_quote("rex", "Rex", "Rex crudelis est.")
 HELPERS.add_quote("king_lupa", "Lupa", "Lupam liberare debemus.")
 HELPERS.add_quote("publilius", "Publilius", "Publilium servavimus!")
@@ -56,8 +49,6 @@ local storyitems = require("storyitems")
 AddPrefabPostInit("panflute", storyitems.SetupPanFlute)
 AddPrefabPostInit("bell", storyitems.SetupNamed)
 AddPrefabPostInit("bigfoot", require("kingscene").SetupFoot)
-
-modimport("items/hugTest.lua")
 
 AddPlayerPostInit(function(inst)
   if not GLOBAL.TheWorld.ismastersim then

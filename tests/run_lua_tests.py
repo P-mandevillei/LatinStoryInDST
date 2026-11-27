@@ -23,6 +23,15 @@ for name in sys.argv[1:] or ["libellusprogress", "casa", "dialogselection", "kin
         runtime.globals().package.preload["components/gamepetleash"] = runtime.eval(
             "function(source) return assert(loadstring(source)) end"
         )(source)
+        if name == "casa":
+            with zipfile.ZipFile(bundle) as scripts:
+                for module, filename in {
+                    "components/gamemaprecorder": "components/maprecorder.lua",
+                    "gamemapscroll": "prefabs/mapscroll.lua",
+                }.items():
+                    runtime.globals().package.preload[module] = runtime.eval(
+                        "function(source) return assert(loadstring(source)) end"
+                    )(scripts.read("scripts/" + filename).decode("utf-8", errors="replace"))
         if name == "king":
             with zipfile.ZipFile(bundle) as scripts:
                 for module, filename in {
@@ -37,6 +46,6 @@ for name in sys.argv[1:] or ["libellusprogress", "casa", "dialogselection", "kin
     runtime.execute(path.read_text(encoding="utf-8-sig"))
 
 lua = LuaRuntime()
-for path in [root / "modmain.lua", *root.glob("scripts/**/*.lua")]:
+for path in [root / "modmain.lua", root / "modinfo.lua", *root.glob("scripts/**/*.lua")]:
     lua.execute("assert(loadstring(...))", path.read_text(encoding="utf-8-sig"))
 print("All mod Lua files parse under Lua 5.1.")

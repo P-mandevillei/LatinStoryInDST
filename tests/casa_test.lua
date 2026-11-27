@@ -42,6 +42,7 @@ local function reset()
   cave, blocked, hole, obstacle = false, false, false, false
   random_angles, Ents, AllPlayers = {}, {}, {}
   TheWorld = {ismastersim = true, Map = {}}
+  require("helpers").CASA_SUPPLIES_ENABLED = false
   function TheWorld:HasTag(tag) return tag == "cave" and cave end
   function TheWorld.Map:IsPassableAtPoint(x, y, z)
     return not blocked or x > 80
@@ -214,7 +215,18 @@ local function Entity()
     local c = {}
     self.components[name] = c
     self:AddTag("_" .. name)
-    if name == "talker" then
+    if name == "inspectable" then
+      function c:SetDescription(value) self.description = value end
+    elseif name == "inventoryitem" then
+      function c:ChangeImageName(value) self.imagename = value end
+    elseif name == "maprecorder" then
+      if package.preload["components/gamemaprecorder"] ~= nil then
+        self.components[name] = require("components/gamemaprecorder")(self)
+      else
+        function c:SetOnTeachFn(fn) self.onteachfn = fn end
+        function c:SetOnDataChangedFn(fn) self.ondatachangedfn = fn end
+      end
+    elseif name == "talker" then
       c.untiltime = 0
       function c:IsTalking() return self.untiltime > now end
       function c:Say(text, duration)
@@ -386,13 +398,32 @@ CreateEntity = Entity
 function MakeCharacterPhysics(inst, mass, radius) inst.radius = radius end
 function MakeObstaclePhysics(inst, radius) inst.radius = radius end
 function MakeInventoryPhysics() end
+function MakeInventoryFloatable() end
+function MakeSmallBurnable() end
+function MakeSmallPropagator() end
+function MakeHauntableLaunch() end
 function SpawnPrefab(name)
   local inst
   if factories[name] ~= nil then
     inst = factories[name]()
   else
     inst = Entity()
-    if name == "wall_stone" then
+    if name == "treasurechest" then
+      inst:AddTag("structure")
+      inst.components.container = {slots = {}}
+      function inst.components.container:GiveItem(item)
+        assert(#self.slots < 9, "supply chest overflow")
+        table.insert(self.slots, item)
+        item:AddTag("INLIMBO")
+        return true
+      end
+    elseif name == "bootleg" or name == "cutgrass" or name == "icecream" or name == "glommerfuel" then
+      inst.components.stackable = {maxsize = name == "bootleg" and 10 or name == "glommerfuel" and 20 or 40}
+      function inst.components.stackable:SetStackSize(value)
+        assert(value <= self.maxsize)
+        self.stacksize = value
+      end
+    elseif name == "wall_stone" then
       inst:AddComponent("health"):SetMaxHealth(400)
     elseif name == "publius" then
       inst:AddComponent("talker")
@@ -489,8 +520,19 @@ local HELPERS = require("helpers")
 local DIALOG = require("libellus")
 local Progress = require("components/libellusprogress")
 Prefabs = {evergreen = {fn = function() return SpawnPrefab("evergreen") end}}
+Prefabs.mapscroll = package.preload["gamemapscroll"] ~= nil and require("gamemapscroll") or {
+  fn = function()
+    local inst = Entity()
+    inst.entity:SetPristine()
+    if TheWorld.ismastersim then
+      inst:AddComponent("inventoryitem")
+      inst:AddComponent("maprecorder")
+    end
+    return inst
+  end,
+}
 for _, name in ipairs({"casa", "lupa", "miles", "agricola", "agricola_crop", "agricola_farm", "navis", "senex",
-  "passer", "passer_grove", "passer_burnt_tree", "passer_free", "rex_voice"}) do
+  "passer", "passer_grove", "passer_burnt_tree", "passer_free", "rex_voice", "libellus_worldmap"}) do
   factories[name] = require("prefabs/" .. name).fn
 end
 local count = 0
@@ -578,6 +620,127 @@ test("layout has three to five armed WX-78 guards and a closed Lupa pen", functi
   for x = 2, 6 do assert(walls[x .. ":-5"] and walls[x .. ":-1"]) end
   for z = -4, -2 do assert(walls["2:" .. z] and walls["6:" .. z]) end
   for x = -1, 1 do equal(walls[x .. ":7"], nil) end
+end)
+
+test("supply chest defaults off and uses a disabled mod configuration", function()
+  local _, _, casa = Encounter()
+  equal(casa._supplychest, nil)
+  local config = {}
+  local chunk = assert(loadfile("modinfo.lua"))
+  setfenv(chunk, config)
+  chunk()
+  for _, option in ipairs(config.configuration_options) do
+    if option.name == "casa_supplies" then
+      equal(option.default, false)
+      return
+    end
+  end
+  error("missing casa_supplies option")
+end)
+
+test("optional supply chest fits all requested items in the courtyard", function()
+  HELPERS.CASA_SUPPLIES_ENABLED = true
+  local _, _, casa = Encounter()
+  local chest = casa._supplychest
+  assert(casa:Contains(chest))
+  equal(chest.position.x - casa.position.x, -3)
+  equal(chest.position.z - casa.position.z, -3)
+  local expected = {hammer = 1, armorwood = 1, bootleg = 2, cutgrass = 40,
+    icecream = 4, cane = 1, glommerfuel = 10, libellus_worldmap = 1}
+  equal(#chest.components.container.slots, 8)
+  for _, item in ipairs(chest.components.container.slots) do
+    equal(item.components.stackable ~= nil and item.components.stackable.stacksize or 1, expected[item.prefab])
+    expected[item.prefab] = nil
+  end
+  equal(next(expected), nil)
+  casa:ClearEncounter()
+  assert(chest:IsValid())
+end)
+
+test("supply chest and issuance survive loading without refilling or replacement", function()
+  HELPERS.CASA_SUPPLIES_ENABLED = true
+  local _, _, casa = Encounter()
+  local chest, data = casa._supplychest, {}
+  table.remove(chest.components.container.slots)
+  local refs = casa:OnSave(data)
+  equal(data.supplies_spawned, true)
+  equal(data.supplychest, chest.GUID)
+  local newents = {}
+  for _, guid in ipairs(refs) do newents[guid] = {entity = Ents[guid]} end
+  local loaded = SpawnPrefab("casa")
+  loaded:OnLoad(data)
+  loaded:OnLoadPostPass(newents, data)
+  advance(0)
+  equal(loaded._supplychest, chest)
+  equal(#chest.components.container.slots, 7)
+  chest:Remove()
+  local destroyed = {}
+  loaded:OnSave(destroyed)
+  equal(destroyed.supplychest, nil)
+  local reloaded = SpawnPrefab("casa")
+  reloaded:OnLoad(destroyed)
+  reloaded:OnLoadPostPass({}, destroyed)
+  advance(0)
+  equal(reloaded._supplychest, nil)
+end)
+
+test("enabling supplies adds one chest to an existing populated casa", function()
+  local _, _, casa = Encounter()
+  local data = {}
+  casa:OnSave(data)
+  HELPERS.CASA_SUPPLIES_ENABLED = true
+  local loaded = SpawnPrefab("casa")
+  loaded:OnLoad(data)
+  loaded:OnLoadPostPass({}, data)
+  advance(0)
+  assert(loaded._supplychest ~= nil)
+  equal(#loaded._soldiers, 0)
+  local saved = {}
+  loaded:OnSave(saved)
+  HELPERS.CASA_SUPPLIES_ENABLED = false
+  local disabled = SpawnPrefab("casa")
+  disabled:OnLoad(saved)
+  disabled:OnLoadPostPass({[saved.supplychest] = {entity = loaded._supplychest}}, saved)
+  advance(0)
+  equal(disabled._supplychest, loaded._supplychest)
+end)
+
+test("world map scroll reveals the full rectangular shard only to its reader", function()
+  local player = Player()
+  local points = {}
+  player.player_classified = {MapExplorer = {RevealArea = function(_, x, y, z)
+    equal(y, 0)
+    points[x .. ":" .. z] = true
+  end}}
+  local other = Player("other")
+  other.player_classified = {MapExplorer = {RevealArea = function() error("revealed another player's map") end}}
+  function TheWorld.Map:GetSize() return 40, 25 end
+  local scroll = SpawnPrefab("libellus_worldmap")
+  equal(scroll.components.inventoryitem.imagename, "mapscroll")
+  equal(scroll.components.maprecorder:TeachMap(player), true)
+  assert(points["-80:-50"] and points["80:50"])
+  for x = -80, 80, 4 do
+    for z = -50, 50, 4 do
+      local covered = false
+      for key in pairs(points) do
+        local px, pz = key:match("([^:]+):([^:]+)")
+        if (tonumber(px) - x)^2 + (tonumber(pz) - z)^2 <= 30^2 then covered = true; break end
+      end
+      assert(covered, "map edge left unexplored")
+    end
+  end
+  equal(scroll:IsValid(), false)
+end)
+
+test("world map scroll remains usable when its reader has no map explorer", function()
+  local player = Player()
+  local scroll = SpawnPrefab("libellus_worldmap")
+  local success, reason = scroll.components.maprecorder:TeachMap(player)
+  equal(success, false)
+  equal(reason, "NOEXPLORER")
+  equal(scroll:IsValid(), true)
+  TheWorld.worldprefab = "cave"
+  equal(SpawnPrefab("libellus_worldmap").components.inventoryitem.imagename, "mapscroll_cave")
 end)
 
 test("approach plays exactly two lines with Publius then Octavia", function()
@@ -2506,12 +2669,13 @@ end
 test("client encounter prefabs have visuals and no server-only components", function()
   TheWorld.ismastersim = false
   for _, name in ipairs({"casa", "lupa", "miles", "agricola", "agricola_crop", "agricola_farm", "navis", "senex",
-    "passer", "passer_grove", "passer_free", "rex_voice"}) do
+    "passer", "passer_grove", "passer_free", "rex_voice", "libellus_worldmap"}) do
     local inst = SpawnPrefab(name)
     assert(inst.pristine)
     equal(inst.components.combat, nil)
     equal(inst.components.health, nil)
     equal(inst.components.inventory, nil)
+    if name == "libellus_worldmap" then equal(inst.components.maprecorder, nil) end
     if name == "senex" then
       equal(inst.components.senexshorepush, nil)
       equal(inst.components.pushable, nil)

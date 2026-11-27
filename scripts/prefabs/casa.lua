@@ -1,7 +1,18 @@
 local HELPERS = require("helpers")
 
 local assets = {Asset("ANIM", "anim/pig_house.zip")}
-local prefabs = {"miles", "lupa", "wall_stone"}
+local SUPPLIES = {
+  {"hammer", 1},
+  {"armorwood", 1},
+  {"bootleg", 2},
+  {"cutgrass", 40},
+  {"icecream", 4},
+  {"cane", 1},
+  {"glommerfuel", 10},
+  {"libellus_worldmap", 1},
+}
+local prefabs = {"miles", "lupa", "wall_stone", "treasurechest"}
+for _, supply in ipairs(SUPPLIES) do table.insert(prefabs, supply[1]) end
 local TARGET_EXCLUDE_TAGS = {
   "INLIMBO", "notarget", "playerghost", "structure", "wall", "libellus_soldier"
 }
@@ -111,7 +122,27 @@ local function AddCarpetFloor(inst)
   end
 end
 
+local function SupplyCasa(inst)
+  if not HELPERS.CASA_SUPPLIES_ENABLED or inst._supplies_spawned then return end
+  -- West of the house, clear of the entrance, guards, and Lupa's pen.
+  local chest = SpawnAt(inst, "treasurechest", -3, -3)
+  if chest == nil then return end
+  inst._supplychest = chest
+  inst._supplies_spawned = true
+  for _, supply in ipairs(SUPPLIES) do
+    local item = SpawnPrefab(supply[1])
+    if item ~= nil then
+      if item.components.stackable ~= nil then
+        item.components.stackable:SetStackSize(supply[2])
+      end
+      chest.components.container:GiveItem(item, nil, chest:GetPosition())
+    end
+  end
+end
+
 local function Populate(inst)
+  -- Also supplies casas from older saves when the option is enabled later.
+  SupplyCasa(inst)
   if inst._populated then return end
   inst._populated = true
   AddCarpetFloor(inst)
@@ -153,8 +184,13 @@ local function OnSave(inst, data)
   data.owneruserid = inst._libellus_owneruserid
   data.populated = inst._populated
   data.encounter_cleared = inst._encounter_cleared
+  data.supplies_spawned = inst._supplies_spawned
   data.soldiers = {}
   local refs = {}
+  if inst._supplychest ~= nil and inst._supplychest:IsValid() then
+    data.supplychest = inst._supplychest.GUID
+    table.insert(refs, inst._supplychest.GUID)
+  end
   for _, soldier in ipairs(inst._soldiers) do
     if soldier:IsValid() and not soldier.components.health:IsDead() then
       table.insert(data.soldiers, soldier.GUID)
@@ -173,11 +209,14 @@ local function OnLoad(inst, data)
     inst._libellus_owneruserid = data.owneruserid
     inst._populated = data.populated
     inst._encounter_cleared = data.encounter_cleared
+    inst._supplies_spawned = data.supplies_spawned
   end
 end
 
 local function OnLoadPostPass(inst, newents, data)
   if data == nil then return end
+  inst._supplychest = data.supplychest ~= nil and newents[data.supplychest] ~= nil
+    and newents[data.supplychest].entity or nil
   for _, guid in ipairs(data.soldiers or {}) do
     local ent = newents[guid]
     if ent ~= nil then
