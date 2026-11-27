@@ -1,4 +1,7 @@
 name = "Latin Presentation"
+if folder_name and not folder_name:match("^workshop%-") then
+    name = name .. " [DEV]"
+end
 description = [[
 # Latin Libellus Presentation
 - Final Project of Latin 1510 at Washington University in St. Louis
